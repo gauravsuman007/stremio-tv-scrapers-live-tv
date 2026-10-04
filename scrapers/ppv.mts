@@ -117,7 +117,8 @@ const EVENT_ALIASES: Record<string, string> = {
     "ir iran": "iran",
     "russian federation": "russia",
     "cabo verde": "cape verde",
-    swaziland: "eswatini"
+    swaziland: "eswatini",
+    denamrk: "denmark"
 };
 
 /** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
@@ -848,7 +849,7 @@ function buildEvents(): Promise<ScrapedCatalogue> {
 export const ppvScraper: Scraper = {
     id: SCRAPER_ID,
     name: "PPV.ST",
-    version: "1.2.0",
+    version: "1.2.1",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveStream },

@@ -163,7 +163,8 @@ const EVENT_ALIASES: Record<string, string> = {
     "ir iran": "iran",
     "russian federation": "russia",
     "cabo verde": "cape verde",
-    swaziland: "eswatini"
+    swaziland: "eswatini",
+    denamrk: "denmark"
 };
 
 /** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
@@ -756,6 +757,12 @@ function teamName(side: string | { name?: string } | undefined): string {
     return typeof side === "string" ? side : side.name || "";
 }
 
+function eventSides(entry: ZliveEvent): string[] {
+    const home = entry.home || entry.homeTeam || teamName(entry.teams?.home);
+    const away = entry.away || entry.awayTeam || teamName(entry.teams?.away);
+    return home && away ? [home, away] : [];
+}
+
 function eventTitle(entry: ZliveEvent): string {
     if (entry.title || entry.name || entry.match) return entry.title || entry.name || entry.match || "";
 
@@ -794,7 +801,7 @@ async function buildEventsRail(): Promise<{ channels: ScrapedChannel[]; rails: S
 
         const category = entry.category || entry.sport || entry.league || "uncategorized";
         const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
-        const described = eventFor(eventTitle(entry), { sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
+        const described = eventFor(eventTitle(entry), { ...(eventSides(entry).length ? { sides: eventSides(entry) } : {}), sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
         const channel: ScrapedChannel = {
             id: idFor(`event:${rawId}`),
             name: described.name,
@@ -1232,7 +1239,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.6.0",
+    version: "1.6.1",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {

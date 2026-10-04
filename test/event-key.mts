@@ -33,6 +33,8 @@ const allKeys = (name: string) => {
 const same = (a: string, b: string) => [...allKeys(a)].some((held) => allKeys(b).has(held));
 const FLAG = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
 
+/* a source's typo is an alias (RoxieStreams: "Wales vs Denamrk") */
+ok(same("Wales vs Denamrk", "Wales vs Denmark"), "a misspelt Denmark merges");
 /* reading a name */
 ok(JSON.stringify(readFixture(`UEFA Nations League : North Macedonia vs Scotland ${FLAG}`)) === JSON.stringify({ sides: ["North Macedonia", "Scotland"], competition: "UEFA Nations League" }), "a competition prefix and a flag come off");
 ok(readFixture("UFC 332: Silva vs Wang")?.competition === "UFC 332", "a card's title is the competition");
