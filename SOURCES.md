@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (31)
+## Implemented (32)
 
 | Site | Note |
 |---|---|
@@ -80,6 +80,7 @@ from a scraper run may be the proxy, not the site.
 | [kodinerds IPTV](https://github.com/jnk22/kodinerds-iptv) | `scrapers/kodinerds.mts`, ~45 German free-to-air channels straight from the broadcasters' masters (ARD, ZDF, arte, WELT, the third programmes ...). 2026-10-05: 12 of 14 spread samples decode. |
 | [M3UPT](https://github.com/LITUATUI/M3UPT) | `scrapers/m3upt.mts`, ~155 Portuguese channels (the list's `TV` group; its VOD, webcam and radio groups are skipped). `#EXTVLCOPT` User-Agent/Origin/Referer lines are carried onto each stream (RTP needs them). 2026-10-05: 9 of 14 spread samples decode without the options; RTP's need them. |
 | [TDTChannels](https://www.tdtchannels.com/) | `scrapers/tdtchannels.mts`, ~440 24/7 channels with an HLS address (Spanish national, regional and local TV by autonomous community, plus international, music and religious). One JSON (`/lists/tv.json`: countries > ambits > channels > `options[{format,url,geo2,res}]`); YouTube/`stream` options skipped, ad macros dropped from addresses, geo options labelled. 2026-10-05: 12 of 16 spread samples decode from Germany. |
+| [Rakuten TV](https://rakuten.tv/) | `scrapers/rakuten.mts`, ~105 free linear channels over five markets (DE, ES, FR, IT, UK). `gizmo.rakuten.tv/v3/live_channels` is public; `POST /v3/avod/streamings` (audio language taken from the channel's own label, `subtitle_language: MIS`) answers an AWS MediaTailor master. The market must match the caller's country (`error.geo_market_not_allowed_for_user_market` otherwise), so each channel has one handle per market and the resolver returns null for the markets the host is not in. 2026-10-05 from Germany: the German market resolves and decodes (3 of 4 samples; France 24 is an ffmpeg format quirk, not retested through the relay). |
 
 ### Formerly backend-blocked
 
@@ -88,13 +89,14 @@ gained segment `decoders` (`ScrapedStream.decoder`) and live-tv
 a relay that runs them -- see `dlhd.mts`. The decoder is a straight port of
 `daddyliveplayer.st`'s own `unwrap()`.
 
-## Possible (4)
+## Possible (5)
 
 | Site | What's missing |
 |---|---|
 | [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`, 93 entries). 2026-10-04 (with DoH): `xyzstreams.blog` answers 502 and the bunny.net host says "Domain suspended or not configured" -- the backend is down; retry when it is back. |
 | [AwardStreams](https://awardstreams.pages.dev/) | One hard-coded restream (`streamthe.awardshere.link/out/v2/<id>/index.m3u8`, in `/players/clappr`) that only answers during award shows (404 otherwise). Would need a short-interval task emitting one channel while it's up. Low value. |
 | [NontonGP](https://esp32.nontonx.com/) | MotoGP/F1/WSBK. 2026-10-04: `/formulaplayer1`, `/mgpplayer2`, `/wsbkplayer1`, `/randomplayer` and `/clearkey` hold a hand-pasted pile of m3u8s (base64-wrapped `http://<ip>:<port>/hls/stream.m3u8` behind `edge*.s1stream.cfd`-style hosts, a Jerez 2026 master, an expired footprint.net token); nothing says which is live. Needs a rule for picking the live URL; low value. |
+| [SportsOnline](https://sportsonline.st/) | `prog.txt` is a plain-text weekly schedule (`HH:MM  A x B | https://<host>/channels/<hd|pt|bra>/<name>.php`, times unlabelled) and `247.txt` lists 24/7 sports channels the same way. Each `.php` iframes `assetrage.net/e/<id>` (Clappr + a 150 KB page whose source is a layered `window._econfig` base64 blob decoded by an obfuscated 89 KB `/assets/stream.js`). The first base64 layer unwraps, the second is binary; the decode is in `stream.js`. 2026-10-05: a research job like WatchFooty's was (trace `stream.js`, probably a zero-import decode), not started. Worth it: events plus ~40 channels. |
 
 ## Untriaged (19)
 
