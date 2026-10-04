@@ -1,8 +1,10 @@
 /**
  * CDN Live TV (cdnlivetv.is) -- live football, NFL, college football, MLB,
  * basketball, motorsport, UFC/WWE and more, as events with a list of TV
- * channels each. Events only (its 400-odd 24/7 channels are the `cdnlive`
- * backend `ntvst.mts` already lists).
+ * channels each, plus its 24/7 channel list (`/api/v1/channels/`: the ~165
+ * the API marks online; about half of those answer when played, and the
+ * resolver returns `null` for the rest, which the host drops). The `cdnlive`
+ * backend `ntvst.mts` reads is the same channel list.
  *
  * THE CHAIN (verified 2026-10-04, plain HTTP, no browser)
  * -------------------------------------------------------
