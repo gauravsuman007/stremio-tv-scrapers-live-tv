@@ -115,6 +115,7 @@
  */
 
 import { createDecipheriv } from "node:crypto";
+import { request } from "node:https";
 import { gunzipSync, inflateSync } from "node:zlib";
 
 // -------------------------------------------------------------------------
@@ -937,9 +938,8 @@ async function postEmbed(kind: "streamed" | "ppv", path: string, fields: string[
     return once();
 }
 
-/** The playlist is NOT fetched here to see whether it is alive: its CDN 403s
- *  Node's TLS 1.3 handshake (the host retries at TLS 1.2, a `fetch` here
- *  cannot), and the host checks every address it is given anyway. */
+/** The playlist's CDN 403s Node's default TLS 1.3 handshake, so `onAir` looks
+ *  at it over TLS 1.2 and a feed whose newest segment is gone gives null. */
 async function resolveEmbed(source: Source): Promise<ResolvedStream | null> {
     const kind = source.kind as "streamed" | "ppv";
     const fields = kind === "streamed" ? source.key.split("/") : [source.key];
@@ -950,8 +950,113 @@ async function resolveEmbed(source: Source): Promise<ResolvedStream | null> {
 
     const playlist = decodeResponse(Buffer.from(await response.arrayBuffer()), response.headers);
     if (!playlist) return null;
+    if (!(await onAir(playlist, `${EMBED_HOSTS[kind]}/`))) return null;
 
     return { url: playlist, referrer: `${EMBED_HOSTS[kind]}/`, userAgent: "" };
+}
+
+// --- is the feed really on air? -----------------------------------------
+
+/**
+ * A listed stream is not always a live one (copied from streamed.mts, which has the measurements). `delta` will hand
+ * out a perfectly good master/media playlist for a game that is over or a
+ * relay that stalled, whose segments are `/m/<opaque>` links that redirect to
+ * the broadcaster's own CDN (`*.lura.live`, `fsy.nfl.com`) and 404 there --
+ * the playlist looks alive, every segment is gone (measured 2026-10-04: the
+ * latest segment of 7 of 10 NFL feeds 404'd while their playlists answered
+ * 200). The host only checks as far as the playlist, so the resolver looks at
+ * the newest segment itself and answers `null` for a feed whose segments are
+ * gone, instead of offering it.
+ *
+ * Done over TLS 1.2 because the CDN 403s Node's default handshake (see the
+ * header). Dead is a 404/410, or a 403 from the broadcaster's CDN (not the lb
+ * node's, whose 403s are rate limits, nor a timeout): the segments redirect to
+ * an Akamai edge that answers "Access Denied" to some callers' addresses, and
+ * the resolver runs on the very address that would play it.
+ */
+interface Probed {
+    status: number;
+    text: string;
+    /** The host that finally answered, after redirects. */
+    host: string;
+}
+
+function probe(url: string, referrer: string, wantBody: boolean, hops = 0): Promise<Probed> {
+    return new Promise((resolve, reject) => {
+        const attempt = request(
+            url,
+            { method: "GET", headers: { "user-agent": BROWSER_UA, referer: referrer }, maxVersion: "TLSv1.2", timeout: 6_000 },
+            (incoming) => {
+                const status = incoming.statusCode || 0;
+                const location = incoming.headers.location;
+
+                if (status >= 300 && status < 400 && location && hops < 3) {
+                    incoming.resume();
+                    probe(new URL(location, url).href, referrer, wantBody, hops + 1).then(resolve, reject);
+                    return;
+                }
+
+                if (!wantBody) {
+                    incoming.destroy();
+                    resolve({ status, text: "", host: new URL(url).host });
+                    return;
+                }
+
+                const chunks: Buffer[] = [];
+                let size = 0;
+                incoming.on("data", (chunk: Buffer) => {
+                    size += chunk.length;
+                    if (size <= 512 * 1024) chunks.push(chunk);
+                });
+                incoming.on("end", () => resolve({ status, text: Buffer.concat(chunks).toString("utf8"), host: new URL(url).host }));
+                incoming.on("error", reject);
+            }
+        );
+
+        attempt.on("timeout", () => attempt.destroy(new Error("probe timed out")));
+        attempt.on("error", reject);
+        attempt.end();
+    });
+}
+
+function uris(playlist: string): string[] {
+    return playlist
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+}
+
+/** False only when the playlist or its newest segment is positively gone. */
+export async function onAir(playlist: string, referrer: string): Promise<boolean> {
+    try {
+        let base = playlist;
+        let page = await probe(base, referrer, true);
+        if (page.status === 404 || page.status === 410) return false;
+        if (page.status !== 200) return true;
+
+        if (page.text.includes("#EXT-X-STREAM-INF")) {
+            const first = uris(page.text)[0];
+            if (!first) return true;
+
+            base = new URL(first, base).href;
+            page = await probe(base, referrer, true);
+            if (page.status === 404 || page.status === 410) return false;
+            if (page.status !== 200) return true;
+        }
+
+        const newest = uris(page.text).pop();
+        if (!newest) return true;
+
+        const segment = await probe(new URL(newest, base).href, referrer, false);
+        if (segment.status === 404 || segment.status === 410) return false;
+
+        // Refused by a DIFFERENT host than the playlist's: the broadcaster's CDN
+        // (Akamai's "Access Denied" for NFL feeds, by the caller's address)
+        // is turning this machine away -- the lb node's own 403s are rate limits.
+        return !(segment.status === 403 && segment.host !== new URL(base).host);
+    } catch {
+        return true;
+    }
 }
 
 // --- names, countries, languages -------------------------------------------------
@@ -1464,7 +1569,7 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
 export const crichdScraper: Scraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.4.0",
+    version: "1.5.0",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveHandle },
