@@ -4,10 +4,12 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const block = readFileSync(new URL("./event-key.block.ts", import.meta.url), "utf8").trim();
 /* Every scraper that carries the block: a new events scraper opts in by adding the BEGIN/END markers. */
-const files = readdirSync(new URL("../scrapers/", import.meta.url))
-    .filter((name) => name.endsWith(".mts"))
-    .map((name) => new URL(`../scrapers/${name}`, import.meta.url))
-    .filter((file) => readFileSync(file, "utf8").includes("// BEGIN event-key"));
+const files = [
+    ...readdirSync(new URL("../scrapers/", import.meta.url))
+        .filter((name) => name.endsWith(".mts"))
+        .map((name) => new URL(`../scrapers/${name}`, import.meta.url)),
+    new URL("../template/scraper-template.mts", import.meta.url)
+].filter((file) => readFileSync(file, "utf8").includes("// BEGIN event-key"));
 const pattern = /\/\/ BEGIN event-key[\s\S]*?\/\/ END event-key/;
 let stale = 0;
 

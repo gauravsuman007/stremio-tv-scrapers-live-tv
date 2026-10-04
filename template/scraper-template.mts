@@ -519,6 +519,13 @@ interface ScraperTask {
     run(ctx: ScraperTaskContext): Promise<void>;
 }
 
+/** What `build()` and `buildEvents()` are handed. */
+interface ScraperBuildContext {
+    /** This scraper's current config values, already reconciled against
+     *  `configSchema`. */
+    config: Record<string, ScraperConfigValue>;
+}
+
 interface Scraper {
     /** Stable, short, lowercase-dashed. Pick it once and do not rename it
      *  after this scraper has shipped -- it is the namespace every id you
@@ -548,7 +555,22 @@ interface Scraper {
     /** OPTIONAL. Named stream resolvers, referenced by
      *  `ScrapedStream.resolver`. See `StreamResolver` above. */
     resolvers?: Record<string, StreamResolver>;
-    build(): Promise<ScrapedCatalogue>;
+    /** The CHANNELS job. For a scraper with live events too, return the
+     *  channel list only (or `{ channels: [] }` when there is none). */
+    build(context?: ScraperBuildContext): Promise<ScrapedCatalogue>;
+    /**
+     * OPTIONAL. The LIVE EVENTS job: fixtures, races, fights -- anything
+     * that is on for a few hours and listed under a name that other sources
+     * list too. Export it and the host runs it as its own job: its own held
+     * result, schedule (`eventsIntervalMinutes` in `configSchema`, default 15
+     * minutes; the channel job's is `channelsIntervalMinutes`, default 12
+     * hours), "Run events" button and status. A slow channel crawl therefore
+     * never holds events back, and events stay fresh with nobody looking.
+     * Same return type as `build()`; every event card should carry `event`
+     * (see `ScrapedEvent`) and a "Live Events" rail. Ids must still start
+     * `live:<your-scraper-id>:`.
+     */
+    buildEvents?(context?: ScraperBuildContext): Promise<ScrapedCatalogue>;
 }
 
 /*
@@ -577,6 +599,203 @@ const SCRAPER_ID = "my-source";
 function idFor(rawId: string): string {
     return `live:${SCRAPER_ID}:${rawId}`;
 }
+
+/*
+    LIVE EVENTS ONLY -- delete the block below (and `buildEvents`, further
+    down) if your source has no live events.
+
+    The BEGIN/END markers are load-bearing: this block is identical in every
+    scraper that lists events and `node scripts/sync-event-key.mjs` rewrites
+    it between them. DO NOT EDIT IT HERE -- change `scripts/event-key.block.ts`
+    and sync. Use it as `eventFor(title, { sides?, competition?, sport?,
+    start? })`: it returns `{ name, event }`, the card's name ("A vs B") and
+    the `event` object to put on the channel.
+*/
+// BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
+
+/** Flags (regional indicators), tag characters, variation selectors, joiners. */
+const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
+
+/** Words some lists put on a club's name and others leave off. */
+const EVENT_GENERIC = new Set(["fc", "cf", "afc", "sc", "fk", "sk", "cd", "ud", "club", "the", "de", "calcio"]);
+
+/** Whole-name spellings that are one team. Keys are already folded. */
+const EVENT_ALIASES: Record<string, string> = {
+    "czech republic": "czechia",
+    czech: "czechia",
+    "united states": "usa",
+    "united states of america": "usa",
+    us: "usa",
+    "korea republic": "south korea",
+    "republic of korea": "south korea",
+    "cote d ivoire": "ivory coast",
+    turkiye: "turkey",
+    holland: "netherlands",
+    "bosnia and herzegovina": "bosnia",
+    "bosnia herzegovina": "bosnia",
+    uae: "united arab emirates",
+    macedonia: "north macedonia",
+    "republic of ireland": "ireland",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "man city": "manchester city",
+    spurs: "tottenham",
+    "tottenham hotspur": "tottenham",
+    "wolverhampton wanderers": "wolves",
+    "paris saint germain": "psg",
+    "paris sg": "psg",
+    "inter milan": "inter",
+    internazionale: "inter",
+    "bayern munich": "bayern",
+    "bayern munchen": "bayern",
+    "dr congo": "congo dr",
+    "china pr": "china",
+    "ir iran": "iran",
+    "russian federation": "russia",
+    "cabo verde": "cape verde",
+    swaziland: "eswatini"
+};
+
+/** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
+function teamKey(name: string): string {
+    const folded = name
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\bwomen'?s?\b|[[(]\s*w\s*[\])]|\bfem(?:inino|enino|inine)?\b/g, " women ")
+        .replace(/\bunder[\s-]?(\d{2})\b/g, " u$1 ")
+        .replace(/\bno\.?\s*\d{1,2}\b(?=\s+[a-z])/g, " ")
+        .replace(/\bst\b\.?/g, "saint")
+        .replace(/['`’]/g, "")
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ");
+    const alias = EVENT_ALIASES[folded] || folded;
+    const tokens = alias.split(" ").filter((token) => token && !EVENT_GENERIC.has(token));
+
+    return (tokens.length ? tokens : alias.split(" ").filter(Boolean)).join(" ");
+}
+
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs
+ * Wang", "Croatia vs England - UEFA Nations League" -> the sides and the
+ * competition, or null when the text is not a fixture.
+ */
+function readFixture(raw: string): { sides: string[]; competition: string } | null {
+    const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0) return null;
+
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+
+    const tail = /^(.*?)(?:\s+[-–|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8) return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side))) return null;
+
+    return { sides, competition };
+}
+
+/** A name that is one of these words is a different team when it is the extra one -- never trimmed away. */
+const EVENT_MARKER = /^(?:u\d\d|women|ii|iii|b|reserves?|youth|jr|junior|academy|castilla|amateur)$/;
+
+/** Too common on their own to stand for a team ("State", "New"). */
+const EVENT_COMMON = new Set(["city", "united", "town", "county", "athletic", "sporting", "real", "club", "national", "state", "college", "university", "new", "north", "south", "east", "west", "saint", "los", "san", "las", "fort", "sint"]);
+
+/**
+ * The other names one team goes by: its identity with trailing words dropped
+ * ("Ohio State Buckeyes" is also "Ohio State", "UNLV Rebels" is also "UNLV"),
+ * longest first, starting with the full identity. A team carrying a women's,
+ * youth or reserve word has none -- dropping it would turn one team into another.
+ */
+function teamNames(name: string): string[] {
+    const full = teamKey(name);
+    const tokens = full.split(" ").filter(Boolean);
+
+    if (tokens.some((token) => EVENT_MARKER.test(token))) return [full];
+
+    const names = [full];
+    let head = tokens;
+
+    /* Drop trailing words one at a time, but never a word like "United" or "State": that is part of the name. */
+    while (head.length > 1 && !EVENT_COMMON.has(head[head.length - 1] || "")) {
+        head = head.slice(0, -1);
+
+        if (head.length === 1 && ((head[0] || "").length < 4 || EVENT_COMMON.has(head[0] || ""))) break;
+        names.push(head.join(" "));
+    }
+
+    return names;
+}
+
+/** Every combination of the sides' names, as sorted keys: the exact one first, at most 16. */
+function eventKeys(sides: string[]): string[] {
+    let keys: string[][] = [[]];
+
+    for (const side of sides) {
+        const names = teamNames(side);
+
+        keys = keys.flatMap((held) => names.map((name) => [...held, name]));
+        if (keys.length > 64) keys = keys.slice(0, 64);
+    }
+
+    return [...new Set(keys.map((parts) => `v:${[...parts].sort().join("|")}`))].slice(0, 16);
+}
+
+/**
+ * The card's `event` and display name. `key` is what the host merges on: the
+ * sides' identities, sorted (so order does not matter), or for an event with
+ * no opponents its folded title without the year. Two sources that compute
+ * the same key for an event are the same event -- the host compares nothing else
+ * but the start time. `keys` are further keys the same event goes by (a
+ * name with its trailing words dropped), for a source that spells a team
+ * shorter: two cards are one event when ANY of their keys is shared.
+ */
+function eventFor(
+    title: string,
+    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+): { name: string; event: ScrapedEvent } {
+    const fixture = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+    const titleKey = title
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\b20\d\d(?:\/\d\d)?\b/g, " ")
+        .replace(/\b(?:live|stream|hd|fhd|full\s+event)\b/g, " ")
+        .replace(/[^a-z0-9]+/g, "");
+    const keys = fixture ? eventKeys(fixture.sides) : [];
+    const key = fixture ? `v:${fixture.sides.map(teamKey).sort().join("|")}` : titleKey.length >= 6 ? `t:${titleKey}` : "";
+
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(key ? { key } : {}),
+            ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
+
+// END event-key
 
 /** A bound on any one request, so a hung server cannot hold up the whole
  *  nightly rebuild. Wrap every `fetch` you make in this. */
@@ -697,6 +916,79 @@ const tasks: ScraperTask[] = [
     }
 ];
 
+/**
+ * EXAMPLE live events job. A source that lists today's fixtures as JSON, each
+ * with its teams, competition, sport and kick-off. The four things that make
+ * the events merge with every other scraper's:
+ *
+ *   1. Pass what the source KNOWS to `eventFor` -- the `sides` when it
+ *      names the teams separately (far better than parsing a title), the
+ *      `competition`, the `sport`, the `start` as EPOCH MILLISECONDS. Never
+ *      invent one; leave it out.
+ *   2. Name the card `described.name` ("Canada vs Peru"): participants only,
+ *      no competition, round, flag or "HD". The identity is in `event.key`.
+ *   3. Put `described.event` on the channel. No `key` (the title was not a
+ *      fixture) makes it an ordinary channel, which is correct for a source's
+ *      "Match Centre 1" feed.
+ *   4. Declare a rail called exactly "Live Events", so every source's events
+ *      share one rail.
+ *
+ * Many sources mirror one event and one source may list it twice; both merge,
+ * so do not de-duplicate your own list. Each mirror is a stream of the card.
+ */
+async function buildEvents(_context?: ScraperBuildContext): Promise<ScrapedCatalogue> {
+    const response = await withTimeout((signal) => fetch("https://example.invalid/live.json", { signal }));
+
+    if (!response.ok) throw new Error(`live.json -> ${response.status}`);
+
+    const raw = (await response.json()) as Array<{
+        id: string;
+        title: string;
+        home?: string;
+        away?: string;
+        league?: string;
+        sport?: string;
+        kickoff?: number; // epoch ms
+        stream_url: string;
+    }>;
+
+    const channels: ScrapedChannel[] = [];
+
+    for (const entry of raw) {
+        if (!entry.stream_url) continue;
+
+        const sides = entry.home && entry.away ? [entry.home, entry.away] : [];
+        const described = eventFor(entry.title, {
+            ...(sides.length ? { sides } : {}),
+            ...(entry.league ? { competition: entry.league } : {}),
+            ...(entry.sport ? { sport: entry.sport } : {}),
+            ...(entry.kickoff ? { start: entry.kickoff } : {})
+        });
+
+        channels.push({
+            id: idFor(entry.id),
+            name: described.name,
+            country: "",
+            countryName: "",
+            countryFlag: "",
+            categories: ["sports", ...(entry.sport ? [entry.sport] : [])],
+            languages: [],
+            logo: "",
+            event: described.event,
+            website: "",
+            network: "",
+            streams: [{ url: entry.stream_url, quality: "", labels: [], referrer: "", userAgent: "" }]
+        });
+    }
+
+    return {
+        channels,
+        rails: channels.length
+            ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((channel) => channel.id), group: "Live events" }]
+            : []
+    };
+}
+
 export const myScraper: Scraper = {
     id: SCRAPER_ID,
     name: "My Source",
@@ -708,7 +1000,11 @@ export const myScraper: Scraper = {
     // scraper has nothing worth exposing as a setting.
     configSchema,
     tasks,
-    build
+    build,
+    // Delete for a source with no live events. With it, channels and events
+    // are two jobs with their own schedules (add `channelsIntervalMinutes`
+    // and `eventsIntervalMinutes` fields to `configSchema` to expose them).
+    buildEvents
 };
 
 // -------------------------------------------------------------------------

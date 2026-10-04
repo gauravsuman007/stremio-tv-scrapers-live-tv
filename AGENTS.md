@@ -685,9 +685,37 @@ one another, so it is copied. **Edit `scripts/event-key.block.ts`, then run
 `node scripts/sync-event-key.mjs`** (`npm test` fails when a copy differs, and
 runs `test/event-key.mts`, which holds the rules: aliases, "FC", rankings, "(w)",
 accents, "v." and "@", and everything that must NOT merge). A new events scraper
-opts in by adding the two marker lines before its `ScrapedChannel` interface and
-calling `eventFor(title, { sides?, competition?, sport?, start? })`, which
+starts from `template/scraper-template.mts`, which already carries the block
+(the sync script keeps the template's copy current too) and a worked
+`buildEvents()`; to add events to an existing scraper, copy the two marker lines
+in and run the sync. `eventFor(title, { sides?, competition?, sport?, start? })`
 returns the display name (the sides joined with " vs ") and the `event` object.
+
+### Checklist for a new scraper that lists live events
+
+1. Copy the template; set `SCRAPER_ID`; keep the `event-key` block and
+   `buildEvents`, drop `build()`'s body to `{ channels: [] }` if the source has
+   no channel list. Never edit the block in the scraper.
+2. For each event, give `eventFor` what the source knows: `sides` when the teams
+   are separate fields (do not parse a title if you do not have to), `competition`,
+   `sport`, and `start` in epoch **milliseconds** (never 0, never seconds; leave
+   it out when unknown -- the host only separates two cards by start when both
+   have one, more than 8 hours apart).
+3. Name the card `described.name`, put `described.event` on the channel, and add
+   every mirror as a stream of that one card. Do not de-duplicate your own list.
+   Do not put the competition, round, flag or "HD" in the name.
+4. Rail: heading exactly `Live Events` (so all sources share one rail), group
+   `Live events`; optional per-sport rails as `Live <Sport>`.
+5. Declare `eventsIntervalMinutes` (and `channelsIntervalMinutes` if there are
+   channels) in `configSchema`; the host reads them for the two jobs.
+6. Dedup quality is measured, not assumed: add the source's awkward spellings to
+   `test/event-key.mts` as cases (one merge case, one must-not-merge case) and
+   fix them in `scripts/event-key.block.ts`, never in your scraper. A team the
+   source writes shorter or differently is an alias (`EVENT_ALIASES`); a side
+   that must never merge with its namesake (women, youth, reserves) is a marker.
+7. Bump `version`, `npm test`, `npm run build`; CI builds `dist/`. Do not commit it.
+8. After deploy, check the Sources page shows the two jobs, and that events from
+   your source merge with another source's card rather than sitting beside it.
 
 ## Two jobs: `build()` is the channels, `buildEvents()` the live events
 
