@@ -521,8 +521,56 @@ function hasPlayer(playerUrl: string): Promise<boolean> {
 
 // --- the events --------------------------------------------------------------
 
+interface CdnListed { name?: string; code?: string; url?: string; image?: string; status?: string }
+
+const CATEGORY_HINTS: [RegExp, string][] = [
+    [/\b(news|cnn|bbc news|sky news|cnbc|msnbc|bloomberg|cp24|euronews|al jazeera)\b/i, "news"],
+    [/\b(sport|sports|espn|dazn|nhl|nba|nfl|mlb|golf|tennis|eurosport|golazo|fight|cricket|racing|f1|premier|laliga|bein|supersport|canal foot|network|tigers|braves|cubs|reds|sox|orioles|guardians|rockies|diamondbacks|altitude)\b/i, "sports"],
+    [/\b(disney|nick|nickelodeon|cartoon|junior|kids|boomerang|baby)\b/i, "kids"],
+    [/\b(movie|movies|cinema|cinemax|hbo|showtime|starz|film|cine)\b/i, "movies"],
+    [/\b(discovery|history|nat geo|national geographic|animal planet|documentary)\b/i, "documentary"]
+];
+
+function flagOf(code: string): string {
+    return /^[a-z]{2}$/i.test(code) ? String.fromCodePoint(...[...code.toUpperCase()].map((ch) => 0x1f1a5 + ch.charCodeAt(0))) : "";
+}
+
+/**
+ * The 24/7 channel list. The API marks each channel online or offline; the
+ * handle resolves at play time, so the player page is not fetched here (that
+ * would be one paced request per channel) -- the host probes each handle.
+ */
 async function build(): Promise<ScrapedCatalogue> {
-    return { channels: [] };
+    const response = await withTimeout((signal) => fetch(`${API}/channels/?${AUTH}`, { signal, headers: { "User-Agent": BROWSER_UA } }));
+    if (!response.ok) throw new Error(`cdnlive: /channels -> ${response.status}`);
+    const body = (await response.json()) as { channels?: CdnListed[] };
+    const names = new Intl.DisplayNames(["en"], { type: "region" });
+    const channels: ScrapedChannel[] = [];
+    const seen = new Set<string>();
+    for (const listed of body.channels || []) {
+        const name = (listed.name || "").replace(/^[:\s]+/, "").replace(/\s+/g, " ").trim();
+        const code = (listed.code || "").toLowerCase();
+        if (listed.status !== "online" || !name || !listed.url) continue;
+        const id = idFor(`${code}:${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        let countryName = "";
+        try { countryName = code ? names.of(code.toUpperCase()) || "" : ""; } catch { /* unknown region */ }
+        channels.push({
+            id,
+            name,
+            country: code.toUpperCase(),
+            countryName,
+            countryFlag: flagOf(code),
+            categories: [CATEGORY_HINTS.find(([re]) => re.test(name))?.[1] || "general"],
+            languages: [],
+            logo: listed.image || "",
+            website: "https://cdnlivetv.is/",
+            network: "",
+            streams: [{ url: handleFor(listed.url), quality: "", labels: [], referrer: REFERRER, userAgent: BROWSER_UA, resolver: RESOLVER }]
+        });
+    }
+    return { channels };
 }
 
 async function buildEvents(): Promise<ScrapedCatalogue> {
@@ -593,6 +641,14 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
 
 const configSchema: ScraperConfigField[] = [
     {
+        key: "channelsIntervalMinutes",
+        label: "Channels refresh interval (minutes)",
+        type: "number",
+        default: 720,
+        min: 60,
+        help: "How often the 24/7 channel list is re-read. Each channel is resolved when someone plays it."
+    },
+    {
         key: "eventsIntervalMinutes",
         label: "Events refresh interval (minutes)",
         type: "number",
@@ -605,7 +661,7 @@ const configSchema: ScraperConfigField[] = [
 export const cdnliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "CDN Live TV",
-    version: "1.0.0",
+    version: "1.1.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,
