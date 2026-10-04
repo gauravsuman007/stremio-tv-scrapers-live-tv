@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (18)
+## Implemented (22)
 
 | Site | Note |
 |---|---|
@@ -69,6 +69,8 @@ from a scraper run may be the proxy, not the site.
 | [Streamed](https://streamed.pk/) (+ `streamed.st`; also behind Reedstreams, SportsBite, probably Fantastic Soda) | `scrapers/streamed.mts`. The largest free live-sport catalogue: `/api/matches/live` (~150-200 events at peak, football, NFL/NCAA, MLB, NHL, boxing/UFC PPV, motorsport) + `/api/stream/<source>/<id>` for the stream list (sources `admin`, `delta`, `hotel`, `foxtrot`, `golf`; only ~1/3 of listed sources have streams, and `foxtrot`/`golf` answered 404/403 on every title today). Each stream is a handle resolved at play time by the embed's own handshake: `POST embed.st/fetch` with a protobuf `{source, id, streamNo}` -> a base64-ish text in a fixed alphabet whose ChaCha20 key is the `goat` response header, giving a `lbN.strmd.st/secure/<token>/.../playlist.m3u8` (Referer `https://embed.st/`). Found by snapshotting the `lock.wasm` player's memory; none of the site's code runs. Segments are WebP images with the MPEG-TS inside (`admin`: EXIF chunk; `hotel`: straight after the VP8L stub; `delta`: bare TS) -> `webpexif` decoder. A feed whose newest segment is gone (404, or Akamai "Access Denied" after the redirect) resolves to null (1.3.0, 2026-10-04; ~11 of 37 delta feeds were dead that day). Verified 2026-10-03 through the real host relay: 1080p/540p H.264 + AAC decodes for admin/delta/hotel. **The CDN 403s Node's TLS 1.3 handshake** (curl/ffmpeg/browsers and Node at TLS 1.2 get 200) -- this is what the old rejection mistook for fingerprinting-without-a-fix; live-tv >= 1.10.0 retries a 403 at TLS 1.2. `/fetch` rate-limits (~40 burst), so the resolver paces itself. Needs live-tv 1.10.0 (the resolver needs 1.6.0, the TLS 1.2 retry 1.10.0). Several mirror domains are DNS-blocked in some countries (a German ISP's CUII list); the scraper tries three. |
 | [PPV.ST](https://ppv.st/) (+ SportOnTV, 90minutes, DamiTV's PPV half, SportsBite's PPV half) | `scrapers/ppv.mts`. `api.ppv.st/api/streams` is plain JSON (~70 entries: US football/hockey/baseball/basketball, combat sports, motorsport, ~13 always-live channels such as NFL Network and Fox Footy); only events inside their window are offered, with `substreams` (e.g. SkyCast feeds) as extra streams on the same card. Each stream is a handle resolved at play time by the embed's own handshake: `POST embedindia.st/fetch` with a protobuf of the embed's path -> the SAME alphabet and ChaCha20 as Streamed, but the key's response header is `island`, not `goat` (every 32-letter header is tried now, `streamed.mts` too). Playlist `https://<edge>.indianservers.st/secure/...index.m3u8` needs `Referer: https://embedindia.st/`; segments are TikTok-CDN WebPs with the TS in an EXIF chunk (`webpexif`). Verified 2026-10-03 through the real host relay: 8 of 8 streams decode to 1080p H.264 + AAC. The earlier rejection ("embed does not initialise headless") was wrong in the same way as Streamed's: a plain POST, no browser needed. Needs live-tv 1.10.0. |
 | [Pitsport](https://pitsport.st/) | `scrapers/pitsport.mts`. Events only (~11 live: Nations League, NFL/MLB/NBA, NASCAR, F1...). `/api/v1/live-now` -> `/api/v1/programs/<id>/play` (`videos[].embedUrl` = `embdlol.st/embed/<uuid>`, one per mirror) -> `POST api.embdlol.st/watch {watchId}` -> `prod-eN.tonzoidio.st/hmk/<token>/out/v1/channel(<code>)/index.m3u8`. **No header is needed at all** -- the earlier "unidentified final gate" did not exist (the `hmk-token` is in the URL path, and the playlist, variants and segments answer with no Referer/Origin/token header). Segments are TikTok-CDN WebPs with the TS inside (`webpexif`, same as Streamed/PPV); `onAir` checks the newest segment. Verified 2026-10-04 through the real host relay: 11 of 11 streams decode (1080p H.264 + AAC). Needs live-tv 1.6.0 (resolvers). |
+| [RoxieStreams](https://roxiestreams.su/) | `scrapers/roxiestreams.mts`. Events only (US sport, football, fighting, motorsport; ~4-20 live). Sport pages list rows with Pacific-time starts; each event page's `getRandomStream('<feed>.m3u8', '<sub>')` buttons build `https://<sub>.<domain from /domainsz77.txt>/<feed>.m3u8`: plain HLS, MPEG-TS `.js` segments, no header. Feeds are shared 24/7 restreams, so a mirror is kept only when its newest segment fetches. Reachable from here since the DoH patch (the earlier "Cloudflare-blocked" note was the ISP's DNS). |
+| [CDN Live TV](https://cdnlivetv.is/) (front-ends: Fantastic Soda, StreamSports99; its channel half is `ntvst.mts`'s `cdnlive`) | `scrapers/cdnlive.mts`. Events only, from the documented `api.cdnlivetv.is/api/v1/events/sports/?user=cdnlivetv&plan=free` (UTC starts, teams, tournament, a channel list per event). Most listed channels are off air, so the first few whose stream answers are kept; handles are resolved at play time by unwrapping the randomised-variable player page (same shape as ntvst's `cdnlive`), paced to the site's 100 requests a minute. |
 
 ### Formerly backend-blocked
 
@@ -77,45 +79,32 @@ gained segment `decoders` (`ScrapedStream.decoder`) and live-tv
 a relay that runs them -- see `dlhd.mts`. The decoder is a straight port of
 `daddyliveplayer.st`'s own `unwrap()`.
 
-## Possible (5)
+## Possible (4)
 
 | Site | What's missing |
 |---|---|
-| [RoxieStreams](https://roxiestreams.su/) | Static URL scheme found in the page source: `https://<subdomain, e.g. tedesco>.<random line of /domainsz77.txt>/<channel>.m3u8`. Every stream host Cloudflare-blocked this sandbox ("Attention Required", even in Chromium), so playback couldn't be confirmed -- retest from a different network. |
-| [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`). Both hosts answered 403/502 from this sandbox (with and without Referer), and headless Chromium never requested either -- retest from another network. |
+| [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`, 93 entries). 2026-10-04 (with DoH): `xyzstreams.blog` answers 502 and the bunny.net host says "Domain suspended or not configured" -- the backend is down; retry when it is back. |
 | [AwardStreams](https://awardstreams.pages.dev/) | One hard-coded restream (`streamthe.awardshere.link/out/v2/<id>/index.m3u8`, in `/players/clappr`) that only answers during award shows (404 otherwise). Would need a short-interval task emitting one channel while it's up. Low value. |
-| [NontonGP](https://esp32.nontonx.com/) | MotoGP only. `/mgpplayer2` hard-codes a pile of m3u8s, most stale; the one currently playing (`master3.s2stream.top/hls/stream.m3u8`) needs `Referer: https://esp32.nontonx.com/`. Needs a rule for picking the live URL out of the page. Low value. |
-| [F1 Live](https://flive.dpdns.org/) | Plays via `ddelta.flive.dpdns.org/embed/racing/<ch>`, which this sandbox's egress could not reach (tunnel failed). Untested beyond that. |
+| [NontonGP](https://esp32.nontonx.com/) | MotoGP/F1/WSBK. 2026-10-04: `/formulaplayer1`, `/mgpplayer2`, `/wsbkplayer1`, `/randomplayer` and `/clearkey` hold a hand-pasted pile of m3u8s (base64-wrapped `http://<ip>:<port>/hls/stream.m3u8` behind `edge*.s1stream.cfd`-style hosts, a Jerez 2026 master, an expired footprint.net token); nothing says which is live. Needs a rule for picking the live URL; low value. |
 
-## Untriaged (~30)
+## Untriaged (19)
 
 Mostly live-sport event sites. Each needs its own event -> embed -> stream
 trace; the 2026-09-30 headless pass got as far as the note says.
 
 | Site | Note |
 |---|---|
-| [StreamSports99](https://streamsports99.ru/) (+ mirrors) | Not probed past the homepage (client-rendered). |
-| [SportsindX](https://sportsindx.st/) | Unreachable from this sandbox (connection failed). |
-| [WatchSports](https://watchsports.st/) (+ `.su`) | Unreachable from this sandbox (connection failed). |
 | [LiveTV](https://livetv.sx/enx/) | Unreachable to curl; blank page in headless Chromium. |
 | [StreamCorner](https://streamcorner.st/) (+ mirrors) | Homepage is a blob-script loader that rendered `about:blank` headless. |
 | [StreamEast](https://streameast.ga/) (+ mirrors) | `v2.streameast.ga`, behind an `auth.streamea.st` SSO hand-off and a "buy premium" wall; free streams not located. |
-| [StreamFree](https://streamfree.top/) | Has `/player/<sport>/<slug>` pages and `strmfree.link/api/domains`; embed not traced. |
-| [Watch Footy](https://watchfooty.st/) | Next.js app, `/en/match/<id>` pages; embed not traced. |
 | [Sportsurge](https://v2.sportsurge.net/) | Cloudflare Turnstile ("Just a moment...") even in Chromium. |
 | [TotalSportek](https://total-sportekk.st/) | No stream links reached from the homepage. |
 | [Tap4Sport](https://tap4sport.st/) (+ mirrors) | Cloudflare Turnstile even in Chromium. |
-| [CMVTV](https://cmvlinks.lovable.app/) | Lovable SPA using SofaScore for fixtures; streams not traced. |
-| [Fantastic Soda](https://fantasticsoda.com/) | Uses a Streamed-style `/api/matches/all` (empty to curl) -- probably another Streamed mirror, unconfirmed; if so `streamed.mts` already covers it. |
 | [FSL](https://freestreams-live1h.pk/) | Blob-script loader; no player reached. |
-| [Streami](https://streamic.st/) | Loads `/api/J.php`; not traced. |
-| [FalconStreams](https://falconstreams.app/) | Next.js; no player reached. |
-| [TheTVApp](https://thetvapp.plus/) | `/watch/<league>-streams` listing pages; per-game player not traced. zerostream links `tvpass.org/live/<Channel>/hd`, probably the same family. |
 | [MainPortal66](https://mainportal66.com/) | Links portal; not traced. |
 | [FCTV33](https://www.fctv33hd.co/) | Redirects to `fctv33hd.uno`; calls `apis-data10.tcllu137fien.ru/api/common/params`; not traced. |
 | [VIP Box Sports](https://vipleague.me/home) (+ mirrors) | `/watch-now`; not traced. |
 | [FawaNews](http://www.fawanews.sc/) | 403 from this sandbox. |
-| [Baked.live](https://baked.live/) | No player reached. |
 | [NBAMonster](https://nbamonster.com/) | Redirects to `/vp33/`; not traced. |
 | [OnHockey](https://onhockey.tv/) | Homepage shows standings widgets; per-game embeds not traced. |
 | [OvertakeFans](https://overtakefans.com/) | `/f1-live-stream/` has no player in its static HTML; needs a live session to trace. |
@@ -125,10 +114,17 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (29)
+## Rejected (36)
 
 | Site | Reason |
 |---|---|
+| [Fantastic Soda](https://fantasticsoda.com/) | Front-end over `streamed.pk` (`/api/matches/...`, `streamed.mts`), the cdnlivetv API (`cdnlive.mts`) and StreamFree's API (`streamfree.mts`). Nothing of its own. |
+| [StreamSports99](https://streamsports99.ru/) (+ `streamsports99.is`, `v4.streamsports99.tv`) | React front-end over `api.cdnlivetv.is` -- `cdnlive.mts`. |
+| [SportsindX](https://sportsindx.st/) / [WatchSports](https://watchsports.st/) | Same page (41 KB, `/match/<slug>` with a `data-links` JSON): link lists to `strmfree.st` (StreamFree), `embed.st` (admin/delta/hotel/golf: Streamed), `rockystream.st` and `sportspatrika.com`. Nothing of its own that the covered backends don't already give. |
+| [FalconStreams](https://falconstreams.app/) | `/live/<league>/match/<slug>/<id>` pages that are link lists to ~40 third-party sites per game (`embed.st`, `castppv.cfd`, `4kplayerx.cyou`, ...), each its own gate. An aggregator, not a source. |
+| [Streami](https://streamic.st/) | `/api/J.php` is JSON but holds ~3 events whose embeds are `embedindia.st` (PPV, `ppv.mts`), `epiembeds.online`/`lovetier.bz` (unreachable here) and `videocdn-47xx.website` (403). |
+| [CMVTV](https://cmvlinks.lovable.app/) | A static, hand-curated list of ~40 stream URLs baked into the bundle and wrapped by a lovable.app proxy (`<b64 url>?h=<b64 headers>`): fawanews/Dailymotion/rutube hot-links, no fixture feed. SofaScore is only for logos. |
+| [Baked.live](https://baked.live/) | A CyTube (`calzoneman/sync`) instance: rooms (`/tv/NJPW`, `/tv/Wrestling`, ...) play queued Dailymotion/YouTube items over a socket, not HLS. |
 | [Live24](https://livelive24.com/) | Its own "API" link points straight at `livelive24.com/test/ntv/ntv.json` -- a reskin serving ntv.st's own data, not an independent source. `ntvst.mts` already covers the underlying catalogue (and separately uses this same site as its `falcon`-mirror event-resolution backend for `dlhd`-family events, which is unrelated to its 24/7-channel reskin). |
 | [90minutes](https://www.90minutes.pro/) | Serves DamiTV's public API (PPV-family data), embed URLs only by design. |
 | [SportOnTV](https://sportontv.click/) | Front-end over `api.ppv.st` (PPV, above). |
