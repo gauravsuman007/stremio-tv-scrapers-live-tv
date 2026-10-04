@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (28)
+## Implemented (31)
 
 | Site | Note |
 |---|---|
@@ -77,6 +77,9 @@ from a scraper run may be the proxy, not the site.
 | [Free-TV/IPTV](https://github.com/Free-TV/IPTV) | `scrapers/freetv.mts`, 24/7 channels (~1,600, by country). One hand-curated `playlist.m3u8`; YouTube/Twitch/Pluto/VOD entries skipped, same-name duplicates merged into one channel with several streams, geo-blocked ones labelled. 2026-10-04: 17 of 30 spread samples decode (static community list; the host probes the rest). |
 | [TimStreams](https://timst.cfd/) (also DamiTV's TimStreams half, BINTV) | `scrapers/timstreams.mts`, 184 24/7 channels plus live events. `timst.top/api/channels` and `/api/live-upcoming` are plain JSON (event times are US Eastern). Each stream is `grandemx.org/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, a page that is IP-locked to the caller (the earlier rejection was a research machine versus another egress; a resolver runs on the host, so it matches) whose inline script holds the signed m3u8 in a number array decoded by two integers (`(a[i] ^ KEY) - SUB + 256) % 256`), no code is run. The playlist needs a browser User-Agent (Node's own gets 404); segments are WebP-wrapped TS on TikTok's CDN, handled by `decoders.webpexif` (as Streamed). 2026-10-05 through the real relay: 11 of 11 events and 20 of 30 channels decode. |
 | [NZ & AU TV](https://i.mjh.nz/nzau/raw-tv.m3u8) | `scrapers/nzau.mts`, ~144 24/7 channels (Three/ThreeNow, TVNZ, Sky's free and pop-up channels, Trackside, Māori TV, regional and Australian networks). One community M3U (matthuisman's i.mjh.nz) whose entries are `i.mjh.nz/.r/<slug>.m3u8` redirects to each broadcaster's stream; a resolver follows it at play time (User-Agent `otg/1.5.1 ...`). Broadcaster geo-fences apply: 2026-10-05 from Germany 5 of 10 spread samples decode (Three itself is 403). |
+| [kodinerds IPTV](https://github.com/jnk22/kodinerds-iptv) | `scrapers/kodinerds.mts`, ~45 German free-to-air channels straight from the broadcasters' masters (ARD, ZDF, arte, WELT, the third programmes ...). 2026-10-05: 12 of 14 spread samples decode. |
+| [M3UPT](https://github.com/LITUATUI/M3UPT) | `scrapers/m3upt.mts`, ~155 Portuguese channels (the list's `TV` group; its VOD, webcam and radio groups are skipped). `#EXTVLCOPT` User-Agent/Origin/Referer lines are carried onto each stream (RTP needs them). 2026-10-05: 9 of 14 spread samples decode without the options; RTP's need them. |
+| [TDTChannels](https://www.tdtchannels.com/) | `scrapers/tdtchannels.mts`, ~440 24/7 channels with an HLS address (Spanish national, regional and local TV by autonomous community, plus international, music and religious). One JSON (`/lists/tv.json`: countries > ambits > channels > `options[{format,url,geo2,res}]`); YouTube/`stream` options skipped, ad macros dropped from addresses, geo options labelled. 2026-10-05: 12 of 16 spread samples decode from Germany. |
 
 ### Formerly backend-blocked
 
