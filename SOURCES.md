@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (23)
+## Implemented (26)
 
 | Site | Note |
 |---|---|
@@ -72,6 +72,9 @@ from a scraper run may be the proxy, not the site.
 | [RoxieStreams](https://roxiestreams.su/) | `scrapers/roxiestreams.mts`. Events only (US sport, football, fighting, motorsport; ~4-20 live). Sport pages list rows with Pacific-time starts; each event page's `getRandomStream('<feed>.m3u8', '<sub>')` buttons build `https://<sub>.<domain from /domainsz77.txt>/<feed>.m3u8`: plain HLS, MPEG-TS `.js` segments, no header. Feeds are shared 24/7 restreams, so a mirror is kept only when its newest segment fetches. Reachable from here since the DoH patch (the earlier "Cloudflare-blocked" note was the ISP's DNS). |
 | [CDN Live TV](https://cdnlivetv.is/) (front-ends: Fantastic Soda, StreamSports99; its channel list is also `ntvst.mts`'s `cdnlive` backend) | `scrapers/cdnlive.mts` (1.1.0). Events from the documented `api.cdnlivetv.is/api/v1/events/sports/?user=cdnlivetv&plan=free` (UTC starts, teams, tournament, a channel list per event). Most listed channels are off air, so the first few whose stream answers are kept; handles are resolved at play time by unwrapping the randomised-variable player page (same shape as ntvst's `cdnlive`), paced to the site's 100 requests a minute. 1.1.0 also lists the 24/7 channels from `/api/v1/channels/` (the ~165 marked online; about half of those serve anything, the resolver returns null for the rest). |
 | [WatchFooty](https://watchfooty.st/) (`sportsembed.su` players) | `scrapers/watchfooty.mts`, events only (the API has no channels). `api.watchfooty.st/api/v1/matches/live` is plain JSON with teams, league, sport and a start in ms; each feed's `url` is a `sportsembed.su/embed/...` page. The old "WASM lock" verdict was wrong the way the Streamed one was: `stream-lock.wasm` has **zero imports** and four exports, so it is fetched at resolve time and called as a black box (`op 23` -> factor, `op 41` -> proof, `op 59` -> the playlist URL; layout in the scraper's header) around one `POST /api/get`. Playlists need `Referer: https://sportsembed.su/`; segments are bare TS served as `image/png` from throw-away image hosts. `prime`, `pro`, `deluxe`, `platinum` carry video; `delta`/`hotel` are mostly off air. Verified 2026-10-04 through the real relay: 11 of 14 feeds TS (3 had died between listing and playing), ffmpeg 720p H.264 + AAC. |
+| [Samsung TV Plus](https://www.samsung.com/us/televisions-home-theater/tvs/tv-plus/) | `scrapers/samsungtvplus.mts`, 24/7 channels (~2,600 across US, UK, CA, DE, AT, CH, FR, ES, IT, IN, KR). Channel list: matthuisman's `i.mjh.nz/SamsungTVPlus/.channels.json.gz` (a GitHub mirror, gzip JSON, Samsung's own ids). Stream: `jmp2.uk/stvp-<id>` 302s to a Google DAI HLS master; a resolver follows that redirect at play time. 2026-10-04: 7 of 14 spread samples decode with ffmpeg from Germany; the rest are region-locked or off air (the resolver returns null, the host drops them). |
+| [The Roku Channel](https://therokuchannel.roku.com/) | `scrapers/rokuchannel.mts`, 24/7 channels (~240, US). List: `i.mjh.nz/Roku/.channels.json.gz`; stream: `jmp2.uk/rok-<id>.m3u8` 302 to `aka-live*.delivery.roku.com/.../live.m3u8` (User-Agent `rokuandroid`), resolved at play time. 2026-10-04: 14 of 14 spread samples decode. |
+| [Free-TV/IPTV](https://github.com/Free-TV/IPTV) | `scrapers/freetv.mts`, 24/7 channels (~1,600, by country). One hand-curated `playlist.m3u8`; YouTube/Twitch/Pluto/VOD entries skipped, same-name duplicates merged into one channel with several streams, geo-blocked ones labelled. 2026-10-04: 17 of 30 spread samples decode (static community list; the host probes the rest). |
 
 ### Formerly backend-blocked
 
@@ -115,7 +118,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (36)
+## Rejected (38)
 
 | Site | Reason |
 |---|---|
@@ -155,3 +158,5 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [Zerostream](https://zerostream.alwaysdata.net/) | Mostly anime/VOD. Live part: a 16-entry gist M3U on a server iptv-org already lists, `tvpass.org` links (TheTVApp family) and `slingtv-proxy` iframes. |
 | [Score808](https://score808hd.tv/) | Dead: Cloudflare 522 (origin timeout) on 2026-09-30. |
 | [VenueVault](https://venuevault.live/) | Dead: Cloudflare 526 (invalid origin certificate) on 2026-09-30. |
+| Plex Live TV (`i.mjh.nz/Plex/.channels.json.gz`, `jmp2.uk/plex-<id>.m3u8`) | 2026-10-04: ~2,900 channels, but the stream answers "Channel not available in current location" unless the request carries a spoofed `X-Forwarded-For` of a US/UK/... address (that is what the list's region `headers` are). Not adopted: it would work by defeating the service's geo-fence. |
+| LG Channels (`lgchannels.com`) | The web app is a Vue SPA whose bundle holds only mock channels; the real list is fetched at run time from an API not traced. Retry with a network log. |
