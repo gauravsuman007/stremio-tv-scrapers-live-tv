@@ -1,0 +1,514 @@
+/**
+ * TheTVApp (thetvapp.plus) -- live NFL, NBA, MLB, NHL, college sport, NASCAR
+ * and F1 games. Events only.
+ *
+ * THE CHAIN (verified 2026-10-04, plain HTTP, no browser)
+ * -----------------------------------------------------------------
+ *   1. The home page lists every game as `<a class="list-group-item"
+ *      href="/tv-live/<league>/<teams>/<n>">` (or `/live/<league>/<slug>`)
+ *      holding `<strong>LEAGUE</strong>`, the title ("Las Vegas Raiders vs
+ *      Kansas City Chiefs:") and `<span class="time-badge live">In Progress`.
+ *      Only a badge with class `live` is on air; the others read "3 hours from
+ *      now". No start time is published, so none is passed to `eventFor`.
+ *   2. A game page holds one `id="stream-btn-<id>"` button per server and an
+ *      `<iframe src="https://gooz.aapmains.net/new-stream-embed/<id>">`.
+ *   3. That embed's script sets `const source = "https://<host>/playlist/<id>/
+ *      load-playlist"` (also `window.atob(...)` of the same): a plain HLS master
+ *      whose variants and segments (signed R2 URLs, MPEG-TS) need no Referer, but
+ *      the playlist host 403s Node's and a bare "Mozilla/5.0" User-Agent, so the
+ *      stream names a browser one.
+ *      The playlist host has changed before, so it is read from the embed
+ *      each time, not written down.
+ *
+ * A listed game can have an off-air feed, so a server is kept only when its
+ * master, a variant and the newest segment all fetch.
+ *
+ * What returns nothing: no game badged live, a page with no embed, an embed
+ * whose `source` shape has changed, a feed whose segment 404s.
+ */
+
+// -------------------------------------------------------------------------
+// Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
+// -------------------------------------------------------------------------
+
+interface ScrapedStream {
+    url: string;
+    quality: string;
+    labels: string[];
+    referrer: string;
+    userAgent: string;
+}
+
+/** Who is in a live event and when, so the host can merge it with the same fixture from other sources. */
+interface ScrapedEvent {
+    sides?: string[];
+    /** What the host merges on -- see `eventFor`. */
+    key?: string;
+    /** Further keys the same event goes by. */
+    keys?: string[];
+    title?: string;
+    competition?: string;
+    sport?: string;
+    /** Epoch milliseconds; omitted when unknown. */
+    start?: number;
+}
+
+// BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
+
+/** Flags (regional indicators), tag characters, variation selectors, joiners. */
+const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
+
+/** Words some lists put on a club's name and others leave off. */
+const EVENT_GENERIC = new Set(["fc", "cf", "afc", "sc", "fk", "sk", "cd", "ud", "club", "the", "de", "calcio"]);
+
+/** Whole-name spellings that are one team. Keys are already folded. */
+const EVENT_ALIASES: Record<string, string> = {
+    "czech republic": "czechia",
+    czech: "czechia",
+    "united states": "usa",
+    "united states of america": "usa",
+    us: "usa",
+    "korea republic": "south korea",
+    "republic of korea": "south korea",
+    "cote d ivoire": "ivory coast",
+    turkiye: "turkey",
+    holland: "netherlands",
+    "bosnia and herzegovina": "bosnia",
+    "bosnia herzegovina": "bosnia",
+    uae: "united arab emirates",
+    macedonia: "north macedonia",
+    "republic of ireland": "ireland",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "man city": "manchester city",
+    spurs: "tottenham",
+    "tottenham hotspur": "tottenham",
+    "wolverhampton wanderers": "wolves",
+    "paris saint germain": "psg",
+    "paris sg": "psg",
+    "inter milan": "inter",
+    internazionale: "inter",
+    "bayern munich": "bayern",
+    "bayern munchen": "bayern",
+    "dr congo": "congo dr",
+    "china pr": "china",
+    "ir iran": "iran",
+    "russian federation": "russia",
+    "cabo verde": "cape verde",
+    swaziland: "eswatini",
+    denamrk: "denmark"
+};
+
+/** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
+function teamKey(name: string): string {
+    const folded = name
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\bwomen'?s?\b|[[(]\s*w\s*[\])]|\bfem(?:inino|enino|inine)?\b/g, " women ")
+        .replace(/\bunder[\s-]?(\d{2})\b/g, " u$1 ")
+        .replace(/\bno\.?\s*\d{1,2}\b(?=\s+[a-z])/g, " ")
+        .replace(/\bst\b\.?/g, "saint")
+        .replace(/['`’]/g, "")
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ");
+    const alias = EVENT_ALIASES[folded] || folded;
+    const tokens = alias.split(" ").filter((token) => token && !EVENT_GENERIC.has(token));
+
+    return (tokens.length ? tokens : alias.split(" ").filter(Boolean)).join(" ");
+}
+
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs
+ * Wang", "Croatia vs England - UEFA Nations League" -> the sides and the
+ * competition, or null when the text is not a fixture.
+ */
+function readFixture(raw: string): { sides: string[]; competition: string } | null {
+    const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0) return null;
+
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+
+    const tail = /^(.*?)(?:\s+[-–|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8) return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side))) return null;
+
+    return { sides, competition };
+}
+
+/** A name that is one of these words is a different team when it is the extra one -- never trimmed away. */
+const EVENT_MARKER = /^(?:u\d\d|women|ii|iii|b|reserves?|youth|jr|junior|academy|castilla|amateur)$/;
+
+/** Too common on their own to stand for a team ("State", "New"). */
+const EVENT_COMMON = new Set(["city", "united", "town", "county", "athletic", "sporting", "real", "club", "national", "state", "college", "university", "new", "north", "south", "east", "west", "saint", "los", "san", "las", "fort", "sint"]);
+
+/**
+ * The other names one team goes by: its identity with trailing words dropped
+ * ("Ohio State Buckeyes" is also "Ohio State", "UNLV Rebels" is also "UNLV"),
+ * longest first, starting with the full identity. A team carrying a women's,
+ * youth or reserve word has none -- dropping it would turn one team into another.
+ */
+function teamNames(name: string): string[] {
+    const full = teamKey(name);
+    const tokens = full.split(" ").filter(Boolean);
+
+    if (tokens.some((token) => EVENT_MARKER.test(token))) return [full];
+
+    const names = [full];
+    let head = tokens;
+
+    /* Drop trailing words one at a time, but never a word like "United" or "State": that is part of the name. */
+    while (head.length > 1 && !EVENT_COMMON.has(head[head.length - 1] || "")) {
+        head = head.slice(0, -1);
+
+        if (head.length === 1 && ((head[0] || "").length < 4 || EVENT_COMMON.has(head[0] || ""))) break;
+        names.push(head.join(" "));
+    }
+
+    return names;
+}
+
+/** Every combination of the sides' names, as sorted keys: the exact one first, at most 16. */
+function eventKeys(sides: string[]): string[] {
+    let keys: string[][] = [[]];
+
+    for (const side of sides) {
+        const names = teamNames(side);
+
+        keys = keys.flatMap((held) => names.map((name) => [...held, name]));
+        if (keys.length > 64) keys = keys.slice(0, 64);
+    }
+
+    return [...new Set(keys.map((parts) => `v:${[...parts].sort().join("|")}`))].slice(0, 16);
+}
+
+/**
+ * The card's `event` and display name. `key` is what the host merges on: the
+ * sides' identities, sorted (so order does not matter), or for an event with
+ * no opponents its folded title without the year. Two sources that compute
+ * the same key for an event are the same event -- the host compares nothing else
+ * but the start time. `keys` are further keys the same event goes by (a
+ * name with its trailing words dropped), for a source that spells a team
+ * shorter: two cards are one event when ANY of their keys is shared.
+ */
+function eventFor(
+    title: string,
+    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+): { name: string; event: ScrapedEvent } {
+    const fixture = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+    const titleKey = title
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\b20\d\d(?:\/\d\d)?\b/g, " ")
+        .replace(/\b(?:live|stream|hd|fhd|full\s+event)\b/g, " ")
+        .replace(/[^a-z0-9]+/g, "");
+    const keys = fixture ? eventKeys(fixture.sides) : [];
+    const key = fixture ? `v:${fixture.sides.map(teamKey).sort().join("|")}` : titleKey.length >= 6 ? `t:${titleKey}` : "";
+
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(key ? { key } : {}),
+            ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
+
+// END event-key
+
+interface ScrapedChannel {
+    id: string;
+    name: string;
+    country: string;
+    countryName: string;
+    countryFlag: string;
+    categories: string[];
+    languages: string[];
+    logo: string;
+    event?: ScrapedEvent;
+    website: string;
+    network: string;
+    streams: ScrapedStream[];
+}
+
+interface ScrapedRail {
+    id: string;
+    heading: string;
+    channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; sources?: string[]; market?: "home-first" | "first" };
+}
+
+interface ScrapedCatalogue {
+    channels: ScrapedChannel[];
+    rails?: ScrapedRail[];
+}
+
+type ScraperConfigValue = string | number | boolean;
+
+interface ScraperConfigField {
+    key: string;
+    label: string;
+    type: "number" | "string" | "boolean";
+    default: ScraperConfigValue;
+    min?: number;
+    max?: number;
+    help?: string;
+}
+
+interface ScraperTaskContext {
+    config: Record<string, ScraperConfigValue>;
+    runTask(id: string): Promise<void>;
+}
+
+interface ScraperTask {
+    id: string;
+    label: string;
+    dependsOn?: string[];
+    intervalConfigKey?: string;
+    run(ctx: ScraperTaskContext): Promise<void>;
+}
+
+interface Scraper {
+    id: string;
+    name: string;
+    version?: string;
+    configSchema?: ScraperConfigField[];
+    buildEvents?(): Promise<ScrapedCatalogue>;
+    build(): Promise<ScrapedCatalogue>;
+}
+
+const SCRAPER_ID = "thetvapp";
+
+function idFor(rawId: string): string {
+    return `live:${SCRAPER_ID}:${rawId}`;
+}
+
+async function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms = 20_000): Promise<T> {
+    const controller = new AbortController();
+    // Deliberately NOT cleared once `work` resolves: `fetch()` resolves on
+    // headers, and the body read (`.json()`/`.text()`) that follows is
+    // still tied to this signal -- clearing the timer here would leave a
+    // stalled body able to hang build() forever. Aborting after the body
+    // is already read is a no-op; `unref()` keeps the timer from holding
+    // the process open.
+    const timer = setTimeout(() => controller.abort(), ms);
+    timer.unref?.();
+
+    try {
+        return await work(controller.signal);
+    } catch (cause) {
+        clearTimeout(timer);
+        throw cause;
+    }
+}
+
+const BASE = "https://thetvapp.plus";
+const MAX_GAMES = 40;
+/** The playlist host answers 403 to Node's and to a bare "Mozilla/5.0" User-Agent; a browser one passes. */
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const SPORT_OF_LEAGUE: Array<[RegExp, string]> = [
+    [/\b(?:nfl|cfb|ncaaf|college football|ufl)\b/i, "american football"],
+    [/\b(?:nba|wnba|ncaab|college basketball|euroleague)\b/i, "basketball"],
+    [/\bmlb\b/i, "baseball"],
+    [/\bnhl\b|\bhockey\b/i, "hockey"],
+    [/\bnascar\b|\bf1\b|formula|motogp|indycar/i, "motorsport"],
+    [/\bufc\b|\bmma\b|\bpfl\b/i, "mma"],
+    [/\bboxing\b/i, "boxing"],
+    [/\bwwe\b|\baew\b/i, "wrestling"]
+];
+
+async function getText(url: string, ms = 15_000): Promise<string> {
+    const response = await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": BROWSER_UA } }), ms);
+    if (!response.ok) throw new Error(`${url} -> ${response.status}`);
+    return await response.text();
+}
+
+function decode(text: string): string {
+    return text
+        .replace(/&amp;/g, "&").replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"')
+        .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ").trim();
+}
+
+interface Game { page: string; league: string; title: string }
+
+/** The games the home page badges live. */
+function liveGames(html: string): Game[] {
+    const games: Game[] = [];
+    for (const m of html.matchAll(/<a [^>]*class="[^"]*list-group-item[^"]*"[^>]*href="(https:\/\/thetvapp\.plus\/(?:tv-live|live)\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g)) {
+        const body = m[2]!;
+        if (!/class="time-badge[^"]*\blive\b/.test(body)) continue;
+        const league = decode(/<strong>([^<]*)<\/strong>/.exec(body)?.[1] || "");
+        const afterLeague = body.split("</span>")[1] || "";
+        const title = decode(afterLeague.replace(/<[^>]*>[\s\S]*$/, "")).replace(/:$/, "").trim();
+        if (title) games.push({ page: m[1]!, league, title });
+    }
+    return games;
+}
+
+interface Server { id: string; embed: string; label: string }
+
+function parseServers(html: string): Server[] {
+    const servers: Server[] = [];
+    const embed = /src="(https:\/\/[a-z0-9.-]+\/new-stream-embed)\/\d+"/i.exec(html)?.[1];
+    if (!embed) return servers;
+    for (const m of html.matchAll(/id="stream-btn-(\d+)"[^>]*>([^<]*)</g)) servers.push({ id: m[1]!, embed, label: decode(m[2]!) });
+    if (!servers.length) {
+        const only = /new-stream-embed\/(\d+)/.exec(html)?.[1];
+        if (only) servers.push({ id: only, embed, label: "" });
+    }
+    return servers;
+}
+
+/** The playlist address an embed page names, or "". */
+async function playlistOf(server: Server): Promise<string> {
+    try {
+        const html = await getText(`${server.embed}/${server.id}`, 10_000);
+        const direct = /const source = "(https:\/\/[^"]+)"/.exec(html)?.[1];
+        const coded = /window\.atob\('([A-Za-z0-9+/=]+)'\)/.exec(html)?.[1];
+        const url = direct || (coded ? Buffer.from(coded, "base64").toString("utf8") : "");
+        return /^https:\/\/[a-z0-9.-]+\/[^\s"']+$/i.test(url) ? url : "";
+    } catch {
+        return "";
+    }
+}
+
+/** Master -> first variant -> newest segment: all three must answer. */
+async function onAir(master: string): Promise<boolean> {
+    try {
+        const masterText = await getText(master, 10_000);
+        if (!masterText.includes("#EXTM3U")) return false;
+        const variant = masterText.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+        const variantUrl = variant ? new URL(variant, master).href : master;
+        const variantText = variant ? await getText(variantUrl, 10_000) : masterText;
+        const segment = variantText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).pop();
+        if (!segment) return false;
+        const response = await withTimeout((signal) => fetch(new URL(segment, variantUrl), { signal, headers: { "User-Agent": BROWSER_UA } }), 10_000);
+        await response.arrayBuffer().catch(() => undefined);
+        return response.ok;
+    } catch {
+        return false;
+    }
+}
+
+async function fetchEvents(): Promise<ScrapedCatalogue> {
+    const games = liveGames(await getText(`${BASE}/`)).slice(0, MAX_GAMES);
+    const channels: ScrapedChannel[] = [];
+
+    for (const game of games) {
+        let servers: Server[];
+        try {
+            servers = parseServers(await getText(game.page));
+        } catch (cause) {
+            console.error(`thetvapp: ${game.page} skipped`, cause);
+            continue;
+        }
+        const streams: ScrapedStream[] = [];
+        const seen = new Set<string>();
+        for (const server of servers) {
+            const url = await playlistOf(server);
+            if (!url || seen.has(url) || !(await onAir(url))) continue;
+            seen.add(url);
+            streams.push({ url, quality: "", labels: server.label ? [server.label] : [], referrer: "", userAgent: BROWSER_UA });
+        }
+        if (!streams.length) continue;
+
+        const sport = SPORT_OF_LEAGUE.find(([pattern]) => pattern.test(game.league))?.[1] || "";
+        const described = eventFor(game.title, { competition: game.league, ...(sport ? { sport } : {}) });
+        channels.push({
+            id: idFor(game.page.replace(`${BASE}/`, "").replace(/[^A-Za-z0-9]+/g, "-")),
+            name: described.name,
+            event: described.event,
+            country: "",
+            countryName: "",
+            countryFlag: "",
+            categories: ["sports", ...(sport ? [sport] : [])],
+            languages: [],
+            logo: "",
+            website: game.page,
+            network: described.event.competition || game.league,
+            streams
+        });
+    }
+
+    return {
+        channels,
+        rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] : []
+    };
+}
+
+const configSchema: ScraperConfigField[] = [
+    {
+        key: "eventsIntervalMinutes",
+        label: "Events refresh interval (minutes)",
+        type: "number",
+        default: 15,
+        min: 10,
+        help: "How often the schedule is re-read. Only games the site marks live are listed."
+    }
+];
+
+/*
+    EVENTS ONLY: this source has no channel list, so `build()` is empty and
+    `buildEvents()` is the whole scraper -- the host runs it on
+    `eventsIntervalMinutes`.
+*/
+async function build(): Promise<ScrapedCatalogue> {
+    return { channels: [] };
+}
+
+function buildEvents(): Promise<ScrapedCatalogue> {
+    return fetchEvents();
+}
+
+export const thetvappScraper: Scraper = {
+    id: SCRAPER_ID,
+    name: "TheTVApp",
+    version: "1.0.0",
+    configSchema,
+    build,
+    buildEvents
+};
+
+// -------------------------------------------------------------------------
+// `npx tsx scrapers/thetvapp.mts` -- prints a channel count and the first
+// channel found.
+// -------------------------------------------------------------------------
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+    buildEvents()
+        .then((catalogue) => {
+            console.log(`${catalogue.channels.length} channels, ${(catalogue.rails || []).length} rails`);
+            console.log(catalogue.channels[0] || "(none)");
+        })
+        .catch((cause) => {
+            console.error("build() threw:", cause);
+            process.exitCode = 1;
+        });
+}
