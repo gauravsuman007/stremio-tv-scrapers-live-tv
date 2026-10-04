@@ -63,6 +63,10 @@
  * (`https://streamed.invalid/<source>/<id>/<n>`) resolved at play time by
  * `resolvers.streamed`. Needs live-tv >= 1.10.
  *
+ * A feed whose playlist answers but whose newest segment is 404 (delta, for a
+ * finished game: the segments redirect to a broadcaster CDN that has deleted
+ * them) resolves to `null` -- see `onAir`.
+ *
  * What returns nothing: a source whose embed answers `Not Found` for the
  * playlist (a listed stream that is not actually on air), `/fetch`
  * answering anything but 200, a changed alphabet/key derivation (the decoded
@@ -73,6 +77,7 @@
 // Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
 // -------------------------------------------------------------------------
 import { createDecipheriv } from "node:crypto";
+import { request } from "node:https";
 // BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
 /** Flags (regional indicators), tag characters, variation selectors, joiners. */
 const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
@@ -442,7 +447,80 @@ async function resolveStream(handle) {
     const playlist = decodeResponse(Buffer.from(await response.arrayBuffer()), response.headers);
     if (!playlist)
         return null;
+    if (!(await onAir(playlist, `${EMBED}/`)))
+        return null;
     return { url: playlist, referrer: `${EMBED}/`, userAgent: "" };
+}
+function probe(url, referrer, wantBody, hops = 0) {
+    return new Promise((resolve, reject) => {
+        const attempt = request(url, { method: "GET", headers: { "user-agent": BROWSER_UA, referer: referrer }, maxVersion: "TLSv1.2", timeout: 6_000 }, (incoming) => {
+            const status = incoming.statusCode || 0;
+            const location = incoming.headers.location;
+            if (status >= 300 && status < 400 && location && hops < 3) {
+                incoming.resume();
+                probe(new URL(location, url).href, referrer, wantBody, hops + 1).then(resolve, reject);
+                return;
+            }
+            if (!wantBody) {
+                incoming.destroy();
+                resolve({ status, text: "", host: new URL(url).host });
+                return;
+            }
+            const chunks = [];
+            let size = 0;
+            incoming.on("data", (chunk) => {
+                size += chunk.length;
+                if (size <= 512 * 1024)
+                    chunks.push(chunk);
+            });
+            incoming.on("end", () => resolve({ status, text: Buffer.concat(chunks).toString("utf8"), host: new URL(url).host }));
+            incoming.on("error", reject);
+        });
+        attempt.on("timeout", () => attempt.destroy(new Error("probe timed out")));
+        attempt.on("error", reject);
+        attempt.end();
+    });
+}
+function uris(playlist) {
+    return playlist
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+}
+/** False only when the playlist or its newest segment is positively gone. */
+export async function onAir(playlist, referrer) {
+    try {
+        let base = playlist;
+        let page = await probe(base, referrer, true);
+        if (page.status === 404 || page.status === 410)
+            return false;
+        if (page.status !== 200)
+            return true;
+        if (page.text.includes("#EXT-X-STREAM-INF")) {
+            const first = uris(page.text)[0];
+            if (!first)
+                return true;
+            base = new URL(first, base).href;
+            page = await probe(base, referrer, true);
+            if (page.status === 404 || page.status === 410)
+                return false;
+            if (page.status !== 200)
+                return true;
+        }
+        const newest = uris(page.text).pop();
+        if (!newest)
+            return true;
+        const segment = await probe(new URL(newest, base).href, referrer, false);
+        if (segment.status === 404 || segment.status === 410)
+            return false;
+        // Refused by a DIFFERENT host than the playlist's: the broadcaster's CDN
+        // (Akamai's "Access Denied" for NFL feeds, by the caller's address)
+        // is turning this machine away -- the lb node's own 403s are rate limits.
+        return !(segment.status === 403 && segment.host !== new URL(base).host);
+    }
+    catch {
+        return true;
+    }
 }
 // ---- the segment disguise -----------------------------------------------
 /** 0x47 every 188 bytes from `at`, three times over. */
@@ -610,7 +688,7 @@ function buildEvents() {
 export const streamedScraper = {
     id: SCRAPER_ID,
     name: "Streamed",
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveStream },
