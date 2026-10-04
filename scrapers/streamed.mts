@@ -63,6 +63,10 @@
  * (`https://streamed.invalid/<source>/<id>/<n>`) resolved at play time by
  * `resolvers.streamed`. Needs live-tv >= 1.10.
  *
+ * A feed whose playlist answers but whose newest segment is 404 (delta, for a
+ * finished game: the segments redirect to a broadcaster CDN that has deleted
+ * them) resolves to `null` -- see `onAir`.
+ *
  * What returns nothing: a source whose embed answers `Not Found` for the
  * playlist (a listed stream that is not actually on air), `/fetch`
  * answering anything but 200, a changed alphabet/key derivation (the decoded
@@ -75,6 +79,7 @@
 // -------------------------------------------------------------------------
 
 import { createDecipheriv } from "node:crypto";
+import { request } from "node:https";
 
 interface ScrapedStream {
     url: string;
@@ -598,8 +603,113 @@ async function resolveStream(handle: string): Promise<ResolvedStream | null> {
 
     const playlist = decodeResponse(Buffer.from(await response.arrayBuffer()), response.headers);
     if (!playlist) return null;
+    if (!(await onAir(playlist, `${EMBED}/`))) return null;
 
     return { url: playlist, referrer: `${EMBED}/`, userAgent: "" };
+}
+
+// ---- is the feed really on air? -----------------------------------------
+
+/**
+ * A listed stream is not always a live one. `delta` in particular will hand
+ * out a perfectly good master/media playlist for a game that is over or a
+ * relay that stalled, whose segments are `/m/<opaque>` links that redirect to
+ * the broadcaster's own CDN (`*.lura.live`, `fsy.nfl.com`) and 404 there --
+ * the playlist looks alive, every segment is gone (measured 2026-10-04: the
+ * latest segment of 7 of 10 NFL feeds 404'd while their playlists answered
+ * 200). The host only checks as far as the playlist, so the resolver looks at
+ * the newest segment itself and answers `null` for a feed whose segments are
+ * gone, instead of offering it.
+ *
+ * Done over TLS 1.2 because the CDN 403s Node's default handshake (see the
+ * header). Dead is a 404/410, or a 403 from the broadcaster's CDN (not the lb
+ * node's, whose 403s are rate limits, nor a timeout): the segments redirect to
+ * an Akamai edge that answers "Access Denied" to some callers' addresses, and
+ * the resolver runs on the very address that would play it.
+ */
+interface Probed {
+    status: number;
+    text: string;
+    /** The host that finally answered, after redirects. */
+    host: string;
+}
+
+function probe(url: string, referrer: string, wantBody: boolean, hops = 0): Promise<Probed> {
+    return new Promise((resolve, reject) => {
+        const attempt = request(
+            url,
+            { method: "GET", headers: { "user-agent": BROWSER_UA, referer: referrer }, maxVersion: "TLSv1.2", timeout: 6_000 },
+            (incoming) => {
+                const status = incoming.statusCode || 0;
+                const location = incoming.headers.location;
+
+                if (status >= 300 && status < 400 && location && hops < 3) {
+                    incoming.resume();
+                    probe(new URL(location, url).href, referrer, wantBody, hops + 1).then(resolve, reject);
+                    return;
+                }
+
+                if (!wantBody) {
+                    incoming.destroy();
+                    resolve({ status, text: "", host: new URL(url).host });
+                    return;
+                }
+
+                const chunks: Buffer[] = [];
+                let size = 0;
+                incoming.on("data", (chunk: Buffer) => {
+                    size += chunk.length;
+                    if (size <= 512 * 1024) chunks.push(chunk);
+                });
+                incoming.on("end", () => resolve({ status, text: Buffer.concat(chunks).toString("utf8"), host: new URL(url).host }));
+                incoming.on("error", reject);
+            }
+        );
+
+        attempt.on("timeout", () => attempt.destroy(new Error("probe timed out")));
+        attempt.on("error", reject);
+        attempt.end();
+    });
+}
+
+function uris(playlist: string): string[] {
+    return playlist
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+}
+
+/** False only when the playlist or its newest segment is positively gone. */
+export async function onAir(playlist: string, referrer: string): Promise<boolean> {
+    try {
+        let base = playlist;
+        let page = await probe(base, referrer, true);
+        if (page.status === 404 || page.status === 410) return false;
+        if (page.status !== 200) return true;
+
+        if (page.text.includes("#EXT-X-STREAM-INF")) {
+            const first = uris(page.text)[0];
+            if (!first) return true;
+
+            base = new URL(first, base).href;
+            page = await probe(base, referrer, true);
+            if (page.status === 404 || page.status === 410) return false;
+            if (page.status !== 200) return true;
+        }
+
+        const newest = uris(page.text).pop();
+        if (!newest) return true;
+
+        const segment = await probe(new URL(newest, base).href, referrer, false);
+        if (segment.status === 404 || segment.status === 410) return false;
+
+        // Refused by a DIFFERENT host than the playlist's: the broadcaster's CDN
+        // (Akamai's "Access Denied" for NFL feeds, by the caller's address)
+        // is turning this machine away -- the lb node's own 403s are rate limits.
+        return !(segment.status === 403 && segment.host !== new URL(base).host);
+    } catch {
+        return true;
+    }
 }
 
 // ---- the segment disguise -----------------------------------------------
@@ -820,7 +930,7 @@ function buildEvents(): Promise<ScrapedCatalogue> {
 export const streamedScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Streamed",
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveStream },
