@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (27)
+## Implemented (28)
 
 | Site | Note |
 |---|---|
@@ -76,6 +76,7 @@ from a scraper run may be the proxy, not the site.
 | [The Roku Channel](https://therokuchannel.roku.com/) | `scrapers/rokuchannel.mts`, 24/7 channels (~240, US). List: `i.mjh.nz/Roku/.channels.json.gz`; stream: `jmp2.uk/rok-<id>.m3u8` 302 to `aka-live*.delivery.roku.com/.../live.m3u8` (User-Agent `rokuandroid`), resolved at play time. 2026-10-04: 14 of 14 spread samples decode. |
 | [Free-TV/IPTV](https://github.com/Free-TV/IPTV) | `scrapers/freetv.mts`, 24/7 channels (~1,600, by country). One hand-curated `playlist.m3u8`; YouTube/Twitch/Pluto/VOD entries skipped, same-name duplicates merged into one channel with several streams, geo-blocked ones labelled. 2026-10-04: 17 of 30 spread samples decode (static community list; the host probes the rest). |
 | [TimStreams](https://timst.cfd/) (also DamiTV's TimStreams half, BINTV) | `scrapers/timstreams.mts`, 184 24/7 channels plus live events. `timst.top/api/channels` and `/api/live-upcoming` are plain JSON (event times are US Eastern). Each stream is `grandemx.org/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, a page that is IP-locked to the caller (the earlier rejection was a research machine versus another egress; a resolver runs on the host, so it matches) whose inline script holds the signed m3u8 in a number array decoded by two integers (`(a[i] ^ KEY) - SUB + 256) % 256`), no code is run. The playlist needs a browser User-Agent (Node's own gets 404); segments are WebP-wrapped TS on TikTok's CDN, handled by `decoders.webpexif` (as Streamed). 2026-10-05 through the real relay: 11 of 11 events and 20 of 30 channels decode. |
+| [NZ & AU TV](https://i.mjh.nz/nzau/raw-tv.m3u8) | `scrapers/nzau.mts`, ~144 24/7 channels (Three/ThreeNow, TVNZ, Sky's free and pop-up channels, Trackside, Māori TV, regional and Australian networks). One community M3U (matthuisman's i.mjh.nz) whose entries are `i.mjh.nz/.r/<slug>.m3u8` redirects to each broadcaster's stream; a resolver follows it at play time (User-Agent `otg/1.5.1 ...`). Broadcaster geo-fences apply: 2026-10-05 from Germany 5 of 10 spread samples decode (Three itself is 403). |
 
 ### Formerly backend-blocked
 
@@ -119,7 +120,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (37)
+## Rejected (38)
 
 | Site | Reason |
 |---|---|
@@ -159,4 +160,5 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [Score808](https://score808hd.tv/) | Dead: Cloudflare 522 (origin timeout) on 2026-09-30. |
 | [VenueVault](https://venuevault.live/) | Dead: Cloudflare 526 (invalid origin certificate) on 2026-09-30. |
 | Plex Live TV (`i.mjh.nz/Plex/.channels.json.gz`, `jmp2.uk/plex-<id>.m3u8`) | 2026-10-04: ~2,900 channels, but the stream answers "Channel not available in current location" unless the request carries a spoofed `X-Forwarded-For` of a US/UK/... address (that is what the list's region `headers` are). Not adopted: it would work by defeating the service's geo-fence. |
-| LG Channels (`lgchannels.com`) | The web app is a Vue SPA whose bundle holds only mock channels; the real list is fetched at run time from an API not traced. Retry with a network log. |
+| LG Channels (`lgchannels.com`) | 2026-10-05: `api.lgchannels.com/lineupapi/v1.0/channellist` (headers `X-Device-Country`, `X-Device-Language`, `X-Device-Type: WEB`; the body is base64 of zlib JSON) lists 221 channels for DE, 299 GB, 187 FR (names, ids, providers such as Pluto), but no stream addresses; `/api/v1.0/schedulelist` answers only for the US. Many ids are Pluto's own (`pluto.mts`). Retry only with a real TV session trace.
+| StrikeOut / VIPLeague.vg / 720pStream / embedsports.me | 2026-10-05: one family. Listing pages are plain HTML (`/nfl`, `/nba`, `/live/<sport>/<slug>`), but every stream is an `embed-V2.min.js` iframe on `ninguno.cc/sd0embed/<cat>?...&csrf=...&sec_hash=...` (or `seckyes.cc` session calls) whose player is a window.top-checked, session-guarded obfuscated page with P2P and ad scripts; headless Chromium never reached a playlist. Same shape as the guarded players in the Rejected list; retry only with a manual network trace. |
