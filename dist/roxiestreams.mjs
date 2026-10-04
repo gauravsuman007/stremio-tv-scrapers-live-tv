@@ -1,30 +1,33 @@
 /**
- * Futbol-X (futbol-x.xyz) -- a live-sports events site that publishes its
- * own schedule as plain JSON with DIRECT stream URLs, no embed/resolve
- * step at all.
+ * RoxieStreams (roxiestreams.su) -- live US sport (NFL, NBA, MLB, NHL),
+ * football, fighting, motorsport and NASCAR. Events only.
  *
- *   - `GET /api/stream` lists the categories (`football`, `tennis`,
- *     `fights`, ...).
- *   - `GET /api/<category>.json` answers `{ streams: [{ category,
- *     streams: [{ name, uri_name, poster, tag, starts_at, ends_at,
- *     always_live, streams: [{ title, url }] }] }] }` -- `url` is a
- *     static `.../<slug>/index.m3u8` on the site's own BunnyCDN/relay
- *     hosts. Some categories' files are occasionally malformed JSON and
- *     are skipped rather than failing the build.
+ * THE CHAIN (verified 2026-10-04, plain HTTP, no browser, no header)
+ * -----------------------------------------------------------------
+ *   1. Each sport page (`/soccer`, `/nfl`, `/nba`, ...; the list comes from the
+ *      home page's nav) holds `<table id="eventsTable">` rows: a link to the
+ *      event page and `event-start-time` text such as "October 4, 2026 6:00 AM".
+ *      The site's own `scripts/countdownfinal2.js` reads that text as US
+ *      Pacific time (it hard-codes -7 and says to change it in November); here
+ *      it is read in America/Los_Angeles, so it follows the clock change.
+ *   2. An event page has `<button class="streambutton" onclick="showPlayer(
+ *      'clappr', getRandomStream('<feed>.m3u8', '<subdomain>'))">`: one button per
+ *      mirror. The player builds `https://<subdomain>.<domain>/<feed>.m3u8` with
+ *      `<domain>` a random line of `/domainsz77.txt` (one domain today).
+ *   3. That is plain HLS: the playlist, `index_<feed><n>.js` segments (really
+ *      MPEG-TS, sync byte 0x47) need no Referer and no cookie.
  *
- * Streams need `Referer: https://www.futbol-x.xyz/` -- verified
- * 2026-09-30 on a `*.b-cdn.net` feed: 403 without it, 200 with it. An
- * event's feed is only up around its own kick-off, so only events that
- * haven't ended (plus any `always_live` entry) are returned, refreshed by
- * the hourly `events` task below, and all of them go in the shared
- * "Live Events" rail (see ntvst.mts/zlive.mts, which use the same
- * heading so the rails merge). `starts_at`/`ends_at` carry no zone; they
- * line up with UTC when compared against real fixtures, so they are read
- * as UTC.
+ * The feeds are shared 24/7 restreams (`tudn`, `fs2`, `nfl`, `tsn`, ...), so a
+ * page can list a feed that is carrying something else, or nothing. A mirror
+ * is kept only when its playlist answers and its newest segment fetches.
+ * Several events can point at one feed; each card keeps its own start time.
+ *
+ * Windows: an event is offered from 15 minutes before its start until a sport
+ * -dependent length after it (3.5 h by default, 5 h for fighting, 4.5 h NFL).
+ *
+ * What returns nothing: no live events in a window, a sport page that fails
+ * (skipped, the others still list), every mirror of an event off air.
  */
-// -------------------------------------------------------------------------
-// Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
-// -------------------------------------------------------------------------
 // BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
 /** Flags (regional indicators), tag characters, variation selectors, joiners. */
 const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
@@ -188,7 +191,7 @@ function eventFor(title, extra = {}) {
         }
     };
 }
-const SCRAPER_ID = "futbolx";
+const SCRAPER_ID = "roxiestreams";
 function idFor(rawId) {
     return `live:${SCRAPER_ID}:${rawId}`;
 }
@@ -210,81 +213,207 @@ async function withTimeout(work, ms = 20_000) {
         throw cause;
     }
 }
-const BASE = "https://www.futbol-x.xyz";
-const REFERRER = `${BASE}/`;
-const FALLBACK_CATEGORIES = ["football", "tennis", "basketball", "fights", "motorsports", "americanfootball", "nhl", "baseball", "rugby", "golf", "others", "wrestling", "darts"];
-/** Keep an event this long after its advertised end, for overruns. */
-const GRACE_MS = 60 * 60 * 1000;
-async function getJson(url) {
-    const response = await withTimeout((signal) => fetch(url, { signal }));
+const BASE = "https://roxiestreams.su";
+const HOME_SPORTS = ["soccer", "nfl", "nba", "mlb", "nhl", "fighting", "motorsports", "nascar"];
+const NOT_SPORT_PAGES = new Set(["", "multiview", "index", "home"]);
+const BEFORE_MS = 15 * 60 * 1000;
+/** How long after its start an event is still offered, by sport page. */
+const AFTER_MS = { fighting: 5 * 3600_000, nfl: 4.5 * 3600_000, mlb: 4 * 3600_000, motorsports: 4 * 3600_000, nascar: 4.5 * 3600_000 };
+const DEFAULT_AFTER_MS = 3.5 * 3600_000;
+const SPORT_NAMES = {
+    soccer: "football",
+    nfl: "american football",
+    nba: "basketball",
+    mlb: "baseball",
+    nhl: "hockey",
+    fighting: "fighting",
+    motorsports: "motorsport",
+    nascar: "motorsport"
+};
+const LEAGUES = new Set(["nfl", "nba", "mlb", "nhl", "nascar"]);
+const MAX_PAGES = 40;
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+async function getText(url, ms = 15_000) {
+    const response = await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": "Mozilla/5.0" } }), ms);
     if (!response.ok)
         throw new Error(`${url} -> ${response.status}`);
-    return (await response.json());
+    return await response.text();
 }
-function asUtc(stamp) {
-    if (!stamp)
+/** The Pacific-time offset (ms, west of UTC is negative) in force at an instant. */
+function pacificOffset(at) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles", hourCycle: "h23",
+        year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric"
+    }).formatToParts(new Date(at));
+    const get = (type) => Number(parts.find((p) => p.type === type)?.value);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute")) - Math.floor(at / 60_000) * 60_000;
+}
+/** "October 4, 2026 6:00 AM" read as US Pacific time -> epoch ms, or NaN. */
+function parsePacific(text) {
+    const m = /([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*([AP]M)/i.exec(text);
+    if (!m)
         return NaN;
-    return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(stamp) ? stamp : `${stamp}Z`);
+    const month = MONTHS.indexOf(m[1].toLowerCase());
+    if (month < 0)
+        return NaN;
+    let hour = Number(m[4]) % 12;
+    if (m[6].toUpperCase() === "PM")
+        hour += 12;
+    const wall = Date.UTC(Number(m[3]), month, Number(m[2]), hour, Number(m[5]));
+    let at = wall - pacificOffset(wall + 8 * 3600_000);
+    at = wall - pacificOffset(at);
+    return at;
+}
+function decode(text) {
+    return text
+        .replace(/&amp;/g, "&").replace(/&#0?39;|&apos;/g, "'").replace(/&quot;/g, '"')
+        .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ").trim();
+}
+function parseRows(html, sport) {
+    const rows = [];
+    for (const m of html.matchAll(/<tr>\s*<td><a href="\/?([^"#?]+)">([^<]*)<\/a><\/td>\s*<td class="event-start-time">([^<]*)</g)) {
+        const start = parsePacific(m[3]);
+        const title = decode(m[2]);
+        if (!Number.isFinite(start) || !title)
+            continue;
+        rows.push({ page: m[1], title, start, sport });
+    }
+    return rows;
+}
+/** The sport pages the home page links to, falling back to the known list. */
+async function sportPages() {
+    const found = new Set();
+    try {
+        const home = await getText(`${BASE}/`);
+        for (const m of home.matchAll(/<li class="nav-item"><a class="nav-link" href="\/([a-z0-9-]+)"/g)) {
+            const slug = m[1];
+            if (!NOT_SPORT_PAGES.has(slug) && !/-streams-\d+$/.test(slug) && !/^soccer-streams/.test(slug))
+                found.add(slug);
+        }
+    }
+    catch {
+        /* fall back */
+    }
+    return [...new Set([...HOME_SPORTS, ...found])];
+}
+async function domains() {
+    try {
+        const list = (await getText(`${BASE}/domainsz77.txt`)).split(/\s+/).map((d) => d.trim()).filter((d) => /^[a-z0-9.-]+$/i.test(d));
+        return [...new Set(list)];
+    }
+    catch {
+        return [];
+    }
+}
+function parseFeeds(html) {
+    const feeds = [];
+    for (const m of html.matchAll(/<button class="streambutton"[^>]*getRandomStream\('([^']+)'(?:,\s*'([^']+)')?\)\)"[^>]*>([^<]*)</g)) {
+        const subdomain = m[2] || /var subdomain = '([^']+)'/.exec(html)?.[1] || "admin2";
+        if (!/^[A-Za-z0-9_.-]+\.m3u8$/.test(m[1]) || !/^[a-z0-9-]+$/i.test(subdomain))
+            continue;
+        feeds.push({ path: m[1], subdomain, label: decode(m[3]) });
+    }
+    return feeds;
+}
+/** The first domain whose playlist for this feed answers and whose newest segment fetches. */
+const feedCache = new Map();
+function liveUrl(feed, hosts) {
+    const key = `${feed.subdomain}/${feed.path}`;
+    let cached = feedCache.get(key);
+    if (!cached) {
+        cached = (async () => {
+            for (const host of hosts) {
+                const url = `https://${feed.subdomain}.${host}/${feed.path}`;
+                try {
+                    const playlist = await getText(url, 8_000);
+                    if (!playlist.includes("#EXTM3U"))
+                        continue;
+                    const lines = playlist.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+                    const last = lines[lines.length - 1];
+                    if (!last)
+                        continue;
+                    const segment = await withTimeout((signal) => fetch(new URL(last, url), { signal }), 8_000);
+                    await segment.arrayBuffer().catch(() => undefined);
+                    if (segment.ok)
+                        return url;
+                }
+                catch {
+                    /* next domain */
+                }
+            }
+            return null;
+        })();
+        feedCache.set(key, cached);
+    }
+    return cached;
 }
 async function fetchEvents() {
-    const index = await getJson(`${BASE}/api/stream`).catch(() => ({ categories: FALLBACK_CATEGORIES }));
-    const categories = index.categories?.length ? index.categories : FALLBACK_CATEGORIES;
-    let loaded = 0;
     const now = Date.now();
-    const channels = [];
-    const seen = new Set();
-    for (const category of categories) {
-        let body;
+    const pages = await sportPages();
+    const hosts = await domains();
+    if (!hosts.length)
+        throw new Error("roxiestreams: domainsz77.txt is empty or unreachable");
+    const wanted = [];
+    let loaded = 0;
+    for (const sport of pages) {
         try {
-            body = await getJson(`${BASE}/api/${encodeURIComponent(category)}.json`);
+            const html = await getText(`${BASE}/${sport}`);
             loaded++;
+            for (const row of parseRows(html, sport)) {
+                if (now < row.start - BEFORE_MS || now > row.start + (AFTER_MS[sport] ?? DEFAULT_AFTER_MS))
+                    continue;
+                wanted.push(row);
+            }
         }
         catch (cause) {
-            console.error(`futbolx: ${category} skipped`, cause);
-            continue;
-        }
-        for (const group of body.streams || []) {
-            for (const event of group.streams || []) {
-                if (!event.uri_name || !event.name || seen.has(event.uri_name))
-                    continue;
-                const live = Boolean(event.always_live);
-                const ends = asUtc(event.ends_at);
-                if (!live && !(ends + GRACE_MS > now))
-                    continue;
-                const streams = (event.streams || [])
-                    .filter((s) => s.url && /^https?:\/\//.test(s.url))
-                    .map((s) => ({
-                    url: s.url,
-                    quality: s.title || "",
-                    labels: live ? [] : ["Not 24/7"],
-                    referrer: REFERRER,
-                    userAgent: ""
-                }));
-                if (!streams.length)
-                    continue;
-                seen.add(event.uri_name);
-                const sport = (group.category || category).toLowerCase();
-                const start = live ? 0 : asUtc(event.starts_at);
-                const described = eventFor(event.name.trim(), { sport, competition: event.tag || "", start: Number.isFinite(start) ? start : 0 });
-                channels.push({
-                    id: idFor(event.uri_name),
-                    name: described.name,
-                    event: described.event,
-                    country: "",
-                    countryName: "",
-                    countryFlag: "",
-                    categories: ["sports", (group.category || category).toLowerCase()],
-                    languages: [],
-                    logo: event.poster || "",
-                    website: `${BASE}/live/${event.uri_name}`,
-                    network: described.event.competition || event.tag || "",
-                    streams
-                });
-            }
+            console.error(`roxiestreams: ${sport} skipped`, cause);
         }
     }
     if (!loaded)
-        throw new Error("futbolx: every category file failed");
+        throw new Error("roxiestreams: every sport page failed");
+    feedCache.clear();
+    const channels = [];
+    for (const row of wanted.slice(0, MAX_PAGES)) {
+        let feeds;
+        try {
+            feeds = parseFeeds(await getText(`${BASE}/${row.page}`));
+        }
+        catch (cause) {
+            console.error(`roxiestreams: ${row.page} skipped`, cause);
+            continue;
+        }
+        const streams = [];
+        const seen = new Set();
+        for (const feed of feeds) {
+            const url = await liveUrl(feed, hosts);
+            if (!url || seen.has(url))
+                continue;
+            seen.add(url);
+            streams.push({ url, quality: "", labels: [feed.label || `Stream ${streams.length + 1}`], referrer: "", userAgent: "" });
+        }
+        if (!streams.length)
+            continue;
+        const described = eventFor(row.title, {
+            sport: SPORT_NAMES[row.sport] || row.sport,
+            ...(LEAGUES.has(row.sport) ? { competition: row.sport.toUpperCase() } : {}),
+            start: row.start
+        });
+        channels.push({
+            id: idFor(`${row.page}:${row.start}`),
+            name: described.name,
+            event: described.event,
+            country: "",
+            countryName: "",
+            countryFlag: "",
+            categories: ["sports", SPORT_NAMES[row.sport] || row.sport],
+            languages: [],
+            logo: "",
+            website: `${BASE}/${row.page}`,
+            network: described.event.competition || "",
+            streams
+        });
+    }
     return {
         channels,
         rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] : []
@@ -295,12 +424,11 @@ const configSchema = [
         key: "eventsIntervalMinutes",
         label: "Events refresh interval (minutes)",
         type: "number",
-        default: 60,
+        default: 15,
         min: 10,
-        help: "How often the schedule is re-read. Events are added shortly before kick-off and dropped an hour after they end."
+        help: "How often the schedule is re-read. Events appear 15 minutes before they start and stay a few hours."
     }
 ];
-/** Single-flight cache, same reasoning as ntvst.mts's. */
 /*
     EVENTS ONLY: this source has no channel list, so `build()` is empty and
     `buildEvents()` is the whole scraper -- the host runs it on
@@ -312,16 +440,16 @@ async function build() {
 function buildEvents() {
     return fetchEvents();
 }
-export const futbolxScraper = {
+export const roxiestreamsScraper = {
     id: SCRAPER_ID,
-    name: "Futbol-X",
-    version: "1.2.1",
+    name: "RoxieStreams",
+    version: "1.0.0",
     configSchema,
     build,
     buildEvents
 };
 // -------------------------------------------------------------------------
-// `npx tsx scrapers/futbolx.mts` -- prints a channel count and the first
+// `npx tsx scrapers/roxiestreams.mts` -- prints a channel count and the first
 // channel found.
 // -------------------------------------------------------------------------
 if (import.meta.url === `file://${process.argv[1]}`) {

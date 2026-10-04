@@ -117,7 +117,8 @@ const EVENT_ALIASES = {
     "ir iran": "iran",
     "russian federation": "russia",
     "cabo verde": "cape verde",
-    swaziland: "eswatini"
+    swaziland: "eswatini",
+    denamrk: "denmark"
 };
 /** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
 function teamKey(name) {
@@ -688,7 +689,7 @@ function buildEvents() {
 export const streamedScraper = {
     id: SCRAPER_ID,
     name: "Streamed",
-    version: "1.3.0",
+    version: "1.3.1",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveStream },

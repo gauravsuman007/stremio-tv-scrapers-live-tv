@@ -122,7 +122,8 @@ const EVENT_ALIASES = {
     "ir iran": "iran",
     "russian federation": "russia",
     "cabo verde": "cape verde",
-    swaziland: "eswatini"
+    swaziland: "eswatini",
+    denamrk: "denmark"
 };
 /** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
 function teamKey(name) {
@@ -542,6 +543,11 @@ function teamName(side) {
         return "";
     return typeof side === "string" ? side : side.name || "";
 }
+function eventSides(entry) {
+    const home = entry.home || entry.homeTeam || teamName(entry.teams?.home);
+    const away = entry.away || entry.awayTeam || teamName(entry.teams?.away);
+    return home && away ? [home, away] : [];
+}
 function eventTitle(entry) {
     if (entry.title || entry.name || entry.match)
         return entry.title || entry.name || entry.match || "";
@@ -578,7 +584,7 @@ async function buildEventsRail() {
         const direct = /^https?:\/\//i.test(source.key);
         const category = entry.category || entry.sport || entry.league || "uncategorized";
         const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
-        const described = eventFor(eventTitle(entry), { sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
+        const described = eventFor(eventTitle(entry), { ...(eventSides(entry).length ? { sides: eventSides(entry) } : {}), sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
         const channel = {
             id: idFor(`event:${rawId}`),
             name: described.name,
@@ -992,7 +998,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.6.0",
+    version: "1.6.1",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {

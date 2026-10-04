@@ -129,7 +129,8 @@ const EVENT_ALIASES = {
     "ir iran": "iran",
     "russian federation": "russia",
     "cabo verde": "cape verde",
-    swaziland: "eswatini"
+    swaziland: "eswatini",
+    denamrk: "denmark"
 };
 /** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
 function teamKey(name) {
@@ -804,7 +805,7 @@ async function buildEvents() {
 export const cricwebScraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.5.0",
+    version: "1.5.1",
     configSchema,
     build,
     buildEvents
