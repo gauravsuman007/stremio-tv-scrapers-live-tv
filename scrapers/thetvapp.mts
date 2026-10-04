@@ -399,12 +399,12 @@ async function playlistOf(server: Server): Promise<string> {
     }
 }
 
-/** Master -> first variant -> newest segment: all three must answer. */
+/** Master (or a bare media playlist) -> first variant -> newest segment: all must answer. */
 async function onAir(master: string): Promise<boolean> {
     try {
         const masterText = await getText(master, 10_000);
         if (!masterText.includes("#EXTM3U")) return false;
-        const variant = masterText.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+        const variant = masterText.includes("#EXT-X-STREAM-INF") ? masterText.split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) : undefined;
         const variantUrl = variant ? new URL(variant, master).href : master;
         const variantText = variant ? await getText(variantUrl, 10_000) : masterText;
         const segment = variantText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).pop();
