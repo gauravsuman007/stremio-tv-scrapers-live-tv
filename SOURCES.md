@@ -47,7 +47,7 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (26)
+## Implemented (27)
 
 | Site | Note |
 |---|---|
@@ -75,6 +75,7 @@ from a scraper run may be the proxy, not the site.
 | [Samsung TV Plus](https://www.samsung.com/us/televisions-home-theater/tvs/tv-plus/) | `scrapers/samsungtvplus.mts`, 24/7 channels (~2,600 across US, UK, CA, DE, AT, CH, FR, ES, IT, IN, KR). Channel list: matthuisman's `i.mjh.nz/SamsungTVPlus/.channels.json.gz` (a GitHub mirror, gzip JSON, Samsung's own ids). Stream: `jmp2.uk/stvp-<id>` 302s to a Google DAI HLS master; a resolver follows that redirect at play time. 2026-10-04: 7 of 14 spread samples decode with ffmpeg from Germany; the rest are region-locked or off air (the resolver returns null, the host drops them). |
 | [The Roku Channel](https://therokuchannel.roku.com/) | `scrapers/rokuchannel.mts`, 24/7 channels (~240, US). List: `i.mjh.nz/Roku/.channels.json.gz`; stream: `jmp2.uk/rok-<id>.m3u8` 302 to `aka-live*.delivery.roku.com/.../live.m3u8` (User-Agent `rokuandroid`), resolved at play time. 2026-10-04: 14 of 14 spread samples decode. |
 | [Free-TV/IPTV](https://github.com/Free-TV/IPTV) | `scrapers/freetv.mts`, 24/7 channels (~1,600, by country). One hand-curated `playlist.m3u8`; YouTube/Twitch/Pluto/VOD entries skipped, same-name duplicates merged into one channel with several streams, geo-blocked ones labelled. 2026-10-04: 17 of 30 spread samples decode (static community list; the host probes the rest). |
+| [TimStreams](https://timst.cfd/) (also DamiTV's TimStreams half, BINTV) | `scrapers/timstreams.mts`, 184 24/7 channels plus live events. `timst.top/api/channels` and `/api/live-upcoming` are plain JSON (event times are US Eastern). Each stream is `grandemx.org/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, a page that is IP-locked to the caller (the earlier rejection was a research machine versus another egress; a resolver runs on the host, so it matches) whose inline script holds the signed m3u8 in a number array decoded by two integers (`(a[i] ^ KEY) - SUB + 256) % 256`), no code is run. The playlist needs a browser User-Agent (Node's own gets 404); segments are WebP-wrapped TS on TikTok's CDN, handled by `decoders.webpexif` (as Streamed). 2026-10-05 through the real relay: 11 of 11 events and 20 of 30 channels decode. |
 
 ### Formerly backend-blocked
 
@@ -118,7 +119,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (38)
+## Rejected (37)
 
 | Site | Reason |
 |---|---|
@@ -133,8 +134,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [90minutes](https://www.90minutes.pro/) | Serves DamiTV's public API (PPV-family data), embed URLs only by design. |
 | [SportOnTV](https://sportontv.click/) | Front-end over `api.ppv.st` (PPV, above). |
 | [SportsBite TV](https://sportsbite.org/channels) | Aggregates PPV's and Streamed's APIs; its own 24/7 embeds bounced headless Chromium back to the homepage. The Streamed half is now `streamed.mts`; the PPV half is under *Possible*. Nothing of its own. |
-| [TimStreams](https://timst.cfd/) | `timst.top/api/channels` is clean JSON, but each stream goes `exmxbxe.cfd/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, an IP-locked page ("Access Denied (IP Lock)" from a different egress IP) whose obfuscated inline script (run in `node:vm` with jwplayer stubbed) yields `.../main/secure/<hash>/<expiry>/<slug>.m3u8` (zlive's backend URL family) expiring ~2.5h out; replay 404'd. Headless Chromium gets bounced to a decoy. IP-bound + shorter than a rebuild = unusable. |
-| [DamiTV](https://damitv.st/livetv) | `/data/ts-channels.json`: 165 TimStreams channels (via `messi.damitv.st/papi/ts2/...`, all 502 when tested) + 38 dlhd (covered by `dlhd.mts`). The TimStreams half stays rejected. |
+| [DamiTV](https://damitv.st/livetv) | `/data/ts-channels.json`: 165 TimStreams channels (via `messi.damitv.st/papi/ts2/...`, all 502 when tested) + 38 dlhd (covered by `dlhd.mts`). The TimStreams half is `timstreams.mts` now. |
 | [BINTV](https://www.bintv.cc/) (+ `cosectv.com`) | Reads `timst.top` (TimStreams) plus a Lovable "event-decoder" API over Streamed images -- front-end over rejected backends. |
 | [Matchora](https://matchora.to/) | Clean `/api/v1/live` with per-channel `/api/play/<id>`, but the resulting `edge.matchora.pro/hls/<id>/index.m3u8?t=` token is `base64(id|expiry|sig)` with a 10-minute expiry; even the browser's own refetch 403'd. |
 | [Guide TV](https://guidetv.live/) | Streams via `livelive24.com` (an ntv.st reskin, see Live24) with short-lived `wsSecret`/`wsABSTime` CDN tokens. |

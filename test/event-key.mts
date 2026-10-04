@@ -35,6 +35,20 @@ const FLAG = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
 
 /* a source's typo is an alias (RoxieStreams: "Wales vs Denamrk") */
 ok(same("Wales vs Denamrk", "Wales vs Denmark"), "a misspelt Denmark merges");
+/* TimStreams writes "away @ home", and an American side by its nickname alone */
+ok(same("Norway @ Portugal", "Portugal vs Norway"), "'@' is a versus");
+const keysIn = (sport: string, name: string) => {
+    const { event } = eventFor(name, { sport } as never);
+
+    return new Set([event.key, ...(event.keys || [])].filter(Boolean));
+};
+const sameIn = (sport: string, a: string, b: string) => [...keysIn(sport, a)].some((held) => keysIn(sport, b).has(held));
+ok(sameIn("american football", "Chiefs @ Raiders", "Las Vegas Raiders vs Kansas City Chiefs"), "NFL nicknames merge with full names");
+ok(sameIn("baseball", "Padres @ Brewers", "Milwaukee Brewers vs San Diego Padres"), "MLB nicknames merge with full names");
+ok(sameIn("hockey", "Golden Knights @ Canucks", "Vegas Golden Knights vs Vancouver Canucks"), "NHL nicknames merge with full names");
+ok(!sameIn("american football", "Chiefs @ Raiders", "Chiefs @ Broncos"), "a shared nickname is not a shared fixture");
+ok(!sameIn("american football", "Giants @ Eagles", "San Francisco Giants vs Philadelphia Phillies"), "the nickname Giants is the sport's own team");
+ok(sameIn("baseball", "Giants @ Padres", "San Francisco Giants vs San Diego Padres"), "Giants are San Francisco in baseball");
 /* reading a name */
 ok(JSON.stringify(readFixture(`UEFA Nations League : North Macedonia vs Scotland ${FLAG}`)) === JSON.stringify({ sides: ["North Macedonia", "Scotland"], competition: "UEFA Nations League" }), "a competition prefix and a flag come off");
 ok(readFixture("UFC 332: Silva vs Wang")?.competition === "UFC 332", "a card's title is the competition");
