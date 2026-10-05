@@ -158,12 +158,12 @@ const CONFIG_SCHEMA: ScraperConfigField[] = [
     { key: "keepPerCountry", label: "Proxies kept per country", type: "number", default: 8, min: 1, max: 50 },
     { key: "minScore", label: "Lowest score kept (0-100)", type: "number", default: 40, min: 0, max: 100 },
     { key: "minMbps", label: "Slowest download kept (Mbit/s)", type: "number", default: 3, min: 0.5, max: 100 },
-    { key: "candidates", label: "Candidates tested per country", type: "number", default: 150, min: 5, max: 1000 },
+    { key: "candidates", label: "Candidates tested per country", type: "number", default: 4000, min: 5, max: 10000, help: "Most list entries are dead and cost a 2.5 s connect check; about one in 400 survives every test." },
     { key: "geolocate", label: "Unlabeled proxies geolocated per rebuild", type: "number", default: 1500, min: 0, max: 20000, help: "0 skips lists that carry no country." },
     { key: "extraLists", label: "Extra raw proxy-list URLs (comma-separated)", type: "string", default: "", help: "Plain text, one ip:port per line." },
-    { key: "concurrency", label: "Proxies tested at once", type: "number", default: 30, min: 1, max: 200 },
+    { key: "concurrency", label: "Proxies tested at once", type: "number", default: 150, min: 1, max: 400 },
     { key: "probes", label: "Latency probes per proxy", type: "number", default: 5, min: 3, max: 20 },
-    { key: "budgetSeconds", label: "Longest a rebuild may run (seconds)", type: "number", default: 480, min: 30, max: 3600 },
+    { key: "budgetSeconds", label: "Longest a rebuild may run (seconds)", type: "number", default: 1500, min: 30, max: 3600 },
     { key: "latencyUrl", label: "Latency test URL", type: "string", default: "http://cp.cloudflare.com/generate_204" },
     { key: "speedUrl", label: "Speed test URL (https)", type: "string", default: "https://speed.cloudflare.com/__down?bytes=1000000" },
     {
@@ -297,7 +297,14 @@ const SOURCES: Sources = {
             ["Zaeem20", "Zaeem20/FREE_PROXIES_LIST/master/http.txt"],
             ["proxy4parsing", "proxy4parsing/proxy-list/main/http.txt"],
             ["jetkai", "jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt"],
-            ["zloi-user", "zloi-user/hideip.me/main/http.txt"]
+            ["zloi-user", "zloi-user/hideip.me/main/http.txt"],
+            ["ErcinDedeoglu", "ErcinDedeoglu/proxies/main/proxies/http.txt"],
+            ["Anonym0usWork1221", "Anonym0usWork1221/Free-Proxies/main/proxy_files/http_proxies.txt"],
+            ["sunny9577", "sunny9577/proxy-scraper/master/generated/http_proxies.txt"],
+            ["mmpx12", "mmpx12/proxy-list/master/http.txt"],
+            ["rdavydov", "rdavydov/proxy-list/main/proxies/http.txt"],
+            ["prxchk", "prxchk/proxy-list/main/http.txt"],
+            ["elliottophellia", "elliottophellia/proxylist/master/results/pmix_checked.txt"]
         ].map(([name, path]) => ({ name: name as string, url: `${RAW}/${path}`, parse: (body: string) => plain(body) })),
         ...[
             ["TheSpeedX-socks5", "TheSpeedX/PROXY-List/master/socks5.txt", "socks5"],
@@ -306,7 +313,17 @@ const SOURCES: Sources = {
             ["monosans-socks4", "monosans/proxy-list/main/proxies/socks4.txt", "socks4"],
             ["hookzof", "hookzof/socks5_list/master/proxy.txt", "socks5"],
             ["jetkai-socks5", "jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt", "socks5"],
-            ["MuRongPIG-socks5", "MuRongPIG/Proxy-Master/main/socks5.txt", "socks5"]
+            ["MuRongPIG-socks5", "MuRongPIG/Proxy-Master/main/socks5.txt", "socks5"],
+            ["ShiftyTR-socks5", "ShiftyTR/Proxy-List/master/socks5.txt", "socks5"],
+            ["ShiftyTR-socks4", "ShiftyTR/Proxy-List/master/socks4.txt", "socks4"],
+            ["roosterkid-socks5", "roosterkid/openproxylist/main/SOCKS5_RAW.txt", "socks5"],
+            ["roosterkid-socks4", "roosterkid/openproxylist/main/SOCKS4_RAW.txt", "socks4"],
+            ["vakhov-socks5", "vakhov/fresh-proxy-list/master/socks5.txt", "socks5"],
+            ["Zaeem20-socks5", "Zaeem20/FREE_PROXIES_LIST/master/socks5.txt", "socks5"],
+            ["zloi-user-socks5", "zloi-user/hideip.me/main/socks5.txt", "socks5"],
+            ["ErcinDedeoglu-socks5", "ErcinDedeoglu/proxies/main/proxies/socks5.txt", "socks5"],
+            ["Anonym0usWork1221-socks5", "Anonym0usWork1221/Free-Proxies/main/proxy_files/socks5_proxies.txt", "socks5"],
+            ["mmpx12-socks5", "mmpx12/proxy-list/master/socks5.txt", "socks5"]
         ].map(([name, path, scheme]) => ({ name: name as string, url: `${RAW}/${path}`, parse: (body: string) => plain(body, scheme as Scheme) }))
     ],
     index: `${RAW}/gfpcom/free-proxy-list/main/sources/http.txt`,
@@ -357,12 +374,12 @@ function settingsOf(config: Record<string, ScraperConfigValue> = {}): Settings {
         keep: num(config.keepPerCountry, 8, 1, 50),
         minScore: num(config.minScore, 40, 0, 100),
         minMbps: num(config.minMbps, 3, 0.5, 100),
-        candidates: num(config.candidates, 150, 5, 1000),
+        candidates: num(config.candidates, 4000, 5, 10000),
         geolocate: Math.round(num(config.geolocate, 1500, 0, 20000)),
         extraLists: splitUrls(text(config.extraLists, "")),
-        concurrency: num(config.concurrency, 30, 1, 200),
+        concurrency: num(config.concurrency, 150, 1, 400),
         probes: Math.round(num(config.probes, 5, 3, 20)),
-        budgetMs: num(config.budgetSeconds, 480, 30, 3600) * 1000,
+        budgetMs: num(config.budgetSeconds, 1500, 30, 3600) * 1000,
         latencyUrl: text(config.latencyUrl, "http://cp.cloudflare.com/generate_204"),
         speedUrl: text(config.speedUrl, "https://speed.cloudflare.com/__down?bytes=1000000"),
         geoUrls: geo,
@@ -707,7 +724,25 @@ function countryIn(body: string): string {
 
 type Verdict = { ok: true; info: ProxyInfo } | { ok: false; reason: string };
 
+/** Does anything accept a TCP connection there? Most free-list entries are long dead, and this costs 2.5 s, not a probe's 8. */
+function reachable(url: string, ms = 2_500): Promise<boolean> {
+    return new Promise((resolve) => {
+        const target = new URL(url);
+        const socket = netConnect({ host: target.hostname, port: Number(target.port) });
+        const done = (up: boolean): void => {
+            socket.destroy();
+            resolve(up);
+        };
+
+        socket.setTimeout(ms, () => done(false));
+        socket.once("connect", () => done(true));
+        socket.once("error", () => done(false));
+    });
+}
+
 async function testProxy(url: string, country: string, source: string, cfg: Settings): Promise<Verdict> {
+    if (!(await reachable(url))) return { ok: false, reason: "no connection" };
+
     // 1. Where does it really exit?
     let exit = "";
 
@@ -806,7 +841,8 @@ function proxyUrl(ip: string, port: string | number, scheme: Scheme = "http"): s
     if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet > 255)) return null;
     if (!Number.isInteger(number) || number < 1 || number > 65535) return null;
 
-    return `${scheme}://${ip}:${number}`;
+    // Rebuilt from the numbers: a list's "078.84.81.60" is not a URL host.
+    return `${scheme}://${octets.join(".")}:${number}`;
 }
 
 /**
@@ -1205,7 +1241,16 @@ async function refreshCountry(country: string, deadline: number, gathered?: Cand
     if (good() < cfg.keep && !timeUp()) {
         const seen = new Set(held.map((entry) => entry.url));
         const fresh = (gathered ?? (await gather([country], cfg, deadline)).get(country) ?? []).filter((candidate) => !seen.has(candidate.url));
-        const picked = shuffled(fresh).slice(0, cfg.candidates);
+        // The small per-country lists are tested first; a bulk list that names tens of
+        // thousands of addresses for one country is mostly dead, so it only fills the rest.
+        const size = new Map<string, number>();
+
+        for (const candidate of fresh) size.set(candidate.source, (size.get(candidate.source) ?? 0) + 1);
+
+        const bulk = (candidate: Candidate): number => ((size.get(candidate.source) ?? 0) > 2_000 ? 1 : 0);
+        const picked = shuffled(fresh)
+            .sort((a, b) => bulk(a) - bulk(b))
+            .slice(0, cfg.candidates);
 
         await limited(picked, cfg.concurrency, () => timeUp() || good() >= cfg.keep, async (candidate) => {
             const verdict = await testProxy(candidate.url, country, candidate.source, cfg);
@@ -1338,7 +1383,7 @@ async function build(context?: ScraperBuildContext): Promise<ScrapedCatalogue> {
 export const proxyPoolScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Proxy pool (per-country HTTP proxies)",
-    version: "1.1.0",
+    version: "1.2.0",
     configSchema: CONFIG_SCHEMA,
     proxies: provider,
     build
@@ -1361,6 +1406,8 @@ export const __test = {
     median,
     splitUrls,
     testProxy,
+    reachable,
+    settingsOf,
     through,
     refreshOne,
     reset(next: Partial<Settings> = {}, tls: ConnectionOptions = {}): void {
@@ -1387,7 +1434,7 @@ export const __test = {
 if (import.meta.url === `file://${process.argv[1]}`) {
     const wanted = process.argv.slice(2).map((entry) => entry.toUpperCase());
 
-    build({ config: { countries: (wanted.length ? wanted : ["DE"]).join(",") } })
+    build({ config: { ...JSON.parse(process.env.PROXY_POOL_CONFIG || "{}"), countries: (wanted.length ? wanted : ["DE"]).join(",") } })
         .then(async () => {
             const all = await provider.list();
 

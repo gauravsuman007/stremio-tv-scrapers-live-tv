@@ -500,6 +500,7 @@ ok(
     "a bare address gets the list's own protocol; a scheme on the line wins; socks5h and socks4a are SOCKS5 and SOCKS4"
 );
 ok(__test.parseList("36.66.121.131:8080:Indonesia\n91.211.212.6:32650:Greece").length === 2, "an ip:port:Country line is a proxy");
+ok(JSON.stringify(__test.parseList("078.084.001.060:5328")) === JSON.stringify(["http://78.84.1.60:5328"]), "leading zeros in an address are dropped, not a throw later");
 ok(__test.parseList("not json at all") .length === 0 && __test.parseMonosans("not json").length === 0 && __test.parseGeonode("<html>", "DE").length === 0, "garbage gives nothing, not a throw");
 
 ok(!__test.publicUrl("http://127.0.0.1/x") && !__test.publicUrl("http://localhost/x") && !__test.publicUrl("http://10.0.0.5/x") && !__test.publicUrl("http://192.168.1.1/x") && !__test.publicUrl("http://169.254.169.254/x") && !__test.publicUrl("http://172.20.0.1/x") && !__test.publicUrl("http://[::1]/x") && !__test.publicUrl("file:///etc/passwd"), "discovered lists may not aim inward");

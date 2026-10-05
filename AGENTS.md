@@ -629,6 +629,10 @@ holds it against local fakes):
   MuRongPIG, ...), and discovery through gfpcom's list of lists (public hosts
   only). More raw lists go in its `extraLists` setting. Reddit is not a source:
   unauthenticated reads answer 403 "Blocked" (tried 2026-10-05).
+- **Dead entries are cheap to drop**: a 2.5 s TCP connect check comes first (about
+  nine in ten list entries are dead), and the small per-country lists are tested before
+  the bulk ones (tens of thousands of addresses for one country, mostly dead). About one
+  in 400 candidates survives every test, hence 4000 candidates per country by default.
 - **Tests, never believing a list**: the exit country is measured through the
   proxy; latency and jitter over sequential probes (median, mean consecutive
   difference); a ~1 MB download over HTTPS through CONNECT for speed. Score
