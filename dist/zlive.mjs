@@ -718,9 +718,16 @@ function eventSides(entry) {
     const away = entry.away || entry.awayTeam || teamName(entry.teams?.away);
     return home && away ? [home, away] : [];
 }
+/** The feed's names carry broadcast tags after the fixture ("Turkey @ Italy TR Commentary 4K"): they would become part of the second team. */
+function cleanEventName(name) {
+    return name
+        .replace(/\s+(?:[A-Za-z]{2}\s+)?commentary\b.*$/i, "")
+        .replace(/\s+(?:4k|uhd|fhd|hd|sd)$/i, "")
+        .trim();
+}
 function eventTitle(entry) {
     if (entry.title || entry.name || entry.match)
-        return entry.title || entry.name || entry.match || "";
+        return cleanEventName(entry.title || entry.name || entry.match || "");
     const home = entry.home || entry.homeTeam || teamName(entry.teams?.home);
     const away = entry.away || entry.awayTeam || teamName(entry.teams?.away);
     if (home && away)
@@ -748,13 +755,14 @@ async function buildEventsRail() {
     if (!events.length)
         return { channels: [], rails: [] };
     const resolved = events.map((entry) => {
-        const source = entry.sources?.[0];
-        if (!source)
+        const source = entry.source ?? entry.sources?.[0];
+        if (!source?.key)
             return null;
         const direct = /^https?:\/\//i.test(source.key);
-        const category = entry.category || entry.sport || entry.league || "uncategorized";
+        const category = entry.category || entry.type || entry.sport || entry.league || "uncategorized";
+        const startMs = entry.startTime ? Date.parse(entry.startTime) : NaN;
         const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
-        const described = eventFor(eventTitle(entry), { ...(eventSides(entry).length ? { sides: eventSides(entry) } : {}), sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
+        const described = eventFor(eventTitle(entry), { ...(eventSides(entry).length ? { sides: eventSides(entry) } : {}), sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "", ...(Number.isFinite(startMs) && startMs > 0 ? { start: startMs } : {}) });
         const channel = {
             id: idFor(`event:${rawId}`),
             name: described.name,
@@ -764,7 +772,7 @@ async function buildEventsRail() {
             countryFlag: "",
             categories: [category],
             languages: [],
-            logo: "",
+            logo: /^https:\/\//i.test(entry.thumbnail || "") ? entry.thumbnail : "",
             website: "",
             network: "",
             streams: [
