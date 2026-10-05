@@ -60,7 +60,7 @@
  * embed url>`) resolved at play time by `resolvers.watchfooty`.
  */
 import { randomBytes } from "node:crypto";
-// BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
+// BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-blocks.mjs keeps the copies in step.
 /** Flags (regional indicators), tag characters, variation selectors, joiners. */
 const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
 /** Words some lists put on a club's name and others leave off. */
