@@ -586,6 +586,48 @@ worth recognising *before* spending a research session on:
   that resolves cleanly in research returns nothing once actually
   deployed, suspect this before suspecting the algorithm.
 
+### Geoblocks: working around them is allowed
+
+Working around a geoblock is explicitly permitted, on any source, without
+asking the maintainer first. A source that refuses your address by country (a region-locked API, a
+`geo`/`country` check, a CDN that 403s outside one market) is not a dead
+end by itself. You may work around it **for research**, to learn what the
+source serves and how:
+
+- Reach it from the right country through a VPN, a SOCKS/HTTP proxy, or a
+  remote shell on a host there; or send the country hint the site's own
+  client sends (an `X-Forwarded-For`/`CF-IPCountry`-style header, a
+  `?country=` or market parameter, a region cookie). Use DoH for a
+  DNS-level block (see "Check what a source really serves").
+- Do not ship proxy credentials, VPN endpoints or a third-party relay in a
+  scraper, and do not route `build()` or a resolver through a proxy you
+  run: nothing in the contract can rely on one, and the host would not
+  have it.
+
+What decides whether the source is deliverable is **the host's own IP**,
+not yours. After working around the block, test the final result the way
+the host will see it:
+
+1. **Block lifted by a parameter or header the scraper can send itself**
+   (a market code, a cookie, an `Origin`): ship it normally, state the
+   parameter in the docstring, and confirm the playlist and a segment
+   still play without the workaround on the stream itself.
+2. **Block on the resolve only, stream URLs are open once resolved**
+   (signed URL with no IP binding): research through the proxy, ship the
+   scraper to fetch the same way from the host. Mark it in SOURCES.md as
+   "geoblocked, host must be in <country>" so a deployment elsewhere knows
+   why it returns nothing, and have `build()` return empty rather than
+   throw when the block answers.
+3. **Block on the stream/CDN by IP, or the token is bound to the resolving
+   IP** (`asn=`, an IP in the token): it plays only from that country.
+   Deliver it only if the host runs there; otherwise it is `blocked` in
+   SOURCES.md, naming the country and what the host would need.
+
+Record in STRATEGIES.md how the block showed itself (status code, body,
+the header it keyed on) and in SOURCES.md which country the source needs,
+with the date you last tried; a source that was open from one country is
+worth retrying from a second before calling it dead.
+
 ### Stream resolvers: for an address that cannot be written down ahead of time
 
 If a source's playable URL is signed and expires, is bound to the caller, or
