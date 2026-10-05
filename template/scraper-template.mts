@@ -243,7 +243,97 @@ interface ResolvedStream {
 }
 
 /** `handle` is the stream's own `url`. */
-type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
+/** Options for `ResolverContext.fetch`. */
+interface ResolverFetchOptions {
+    /** `GET` (the default), `POST`, ... */
+    method?: string;
+    headers?: Record<string, string>;
+    /** The request body, for a method that has one. */
+    body?: string;
+    /** Per request; default 12000, at most 20000. */
+    timeoutMs?: number;
+    /**
+     * Where the request leaves from. Left out, it is the stream's own
+     * `country` (see `ScrapedStream.country`) -- through that country's
+     * proxies, best first, failing closed -- and a direct request for a
+     * stream with none. Name another country to fetch from there, or pass
+     * `""` to go out directly even for a geoblocked stream.
+     */
+    country?: string;
+}
+
+/** What `ResolverContext.fetch` returns. Redirects are followed; `bytes` is capped at 4 MB. */
+interface ResolverFetched {
+    status: number;
+    /** Where the request ended, after redirects. */
+    url: string;
+    /** The `content-type` header, or "". */
+    type: string;
+    /** The body decoded as UTF-8. */
+    text: string;
+    bytes: Uint8Array;
+}
+
+/**
+ * Handed to a resolver (live-tv 1.15.0; an older host passes nothing, so
+ * check for it). `fetch` is how a resolver talks to the network when the
+ * stream is geoblocked: the handshake then leaves from the same country as
+ * the video will. A resolver of a stream with no `country` may use it too, or
+ * keep using its own `fetch`, which goes out from the host's own address.
+ */
+interface ResolverContext {
+    /** The stream's `country`, upper case, when it has one. */
+    country?: string;
+    fetch(url: string, options?: ResolverFetchOptions): Promise<ResolverFetched>;
+}
+
+/** `handle` is the stream's own `url`. See `ScrapedStream.resolver`. */
+type StreamResolver = (handle: string, context?: ResolverContext) => Promise<ResolvedStream | null>;
+
+/** Where one tested proxy stands, as a provider reports it to the host's VPN settings page. */
+interface ProxyInfo {
+    /** `http://ip:port`, or `socks5://ip:port` (also `socks5h`, `socks4`, `socks4a`);
+     *  credentials may be embedded as `scheme://user:pass@ip:port`. */
+    url: string;
+    /** ISO 3166-1 alpha-2, upper case: where it was MEASURED to exit. */
+    country: string;
+    /** 0-100, higher is better. */
+    score: number;
+    /** Median round trip of a small request, milliseconds. */
+    latencyMs: number;
+    /** Mean absolute difference of consecutive latencies, milliseconds. */
+    jitterMs: number;
+    /** Measured download over HTTPS, megabits per second. */
+    mbps: number;
+    /** 0-1: share of probes that succeeded. */
+    successRate: number;
+    /** Carried an HTTPS (CONNECT) download. */
+    https: boolean;
+    /** Epoch milliseconds of the last test. */
+    testedAt: number;
+    /** Which list it came from. */
+    source: string;
+    /** Real-use failures since the last success. */
+    failures: number;
+}
+
+/**
+ * OPTIONAL, on `Scraper.proxies`: a source of working HTTP proxies per
+ * country (live-tv 1.14.0). The host knows no proxy list and runs no proxy
+ * test; a provider -- normally one scraper whose `build()` is the refresh job
+ * and which returns `{ channels: [] }` -- owns all of it. See
+ * `ScrapedStream.country` for how the host uses what it returns, and
+ * `scrapers/proxy-pool.mts` for the one that ships.
+ */
+interface ProxyProvider {
+    /** Proxy addresses (`http://` or `socks5://[user:pass@]ip:port`) that exit in `country`,
+     *  best first; `[]` when none is known. Answer quickly. */
+    pick(country: string): Promise<string[]>;
+    /** How a proxy did when the host actually used it. */
+    report?(proxy: string, ok: boolean): void;
+    /** Every proxy held, for the VPN settings page (country, quality). */
+    list?(): Promise<ProxyInfo[]>;
+}
 
 type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
@@ -555,6 +645,11 @@ interface Scraper {
     /** OPTIONAL. Named stream resolvers, referenced by
      *  `ScrapedStream.resolver`. See `StreamResolver` above. */
     resolvers?: Record<string, StreamResolver>;
+    /** OPTIONAL. Makes this scraper the host's source of per-country HTTP
+     *  proxies (live-tv 1.14.0). See `ProxyProvider`. Only `proxy-pool`
+     *  does; a scraper with a geoblocked stream sets `ScrapedStream.country`
+     *  instead and leaves the proxies to it. */
+    proxies?: ProxyProvider;
     /** The CHANNELS job. For a scraper with live events too, return the
      *  channel list only (or `{ channels: [] }` when there is none). */
     build(context?: ScraperBuildContext): Promise<ScrapedCatalogue>;

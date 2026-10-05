@@ -47,6 +47,12 @@ embed family (looks obfuscated; it is a plain POST handshake, now `streamed.mts`
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
+## Infrastructure (not a channel source)
+
+| What | Note |
+|---|---|
+| Proxy pool | `scrapers/proxy-pool.mts`. Returns no channels; exports `proxies` (per-country HTTP proxies, tested for exit country, latency, jitter, HTTPS speed and reliability, scored 0-100). live-tv uses it for any stream with `country` set and lists it on its VPN settings page. Candidates: proxifly, proxyscrape (repo + API), maximilianfeix, GeoNode, monosans, Thordata, spys.me, free-proxy-list.net family, TheSpeedX/clarketm/jetkai/MuRongPIG/vakhov and the lists gfpcom indexes, geolocated via ip-api batch. Reddit rejected: unauthenticated JSON/search/RSS answer 403 (2026-10-05). First live run 2026-10-05: DE gave 4 proxies at 48-78 Mbit/s and 26-61 ms, ES 1; free-proxy supply per country is thin, so expect a handful. |
+
 ## Implemented (32)
 
 | Site | Note |

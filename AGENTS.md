@@ -603,37 +603,51 @@ shipped scraper, as described below:
   a proxy the maintainer supplies (read them from the scraper's
   `configSchema`, never hard-code a secret in the source).
 
-#### Proxy pools: fetched and tested by the scraper itself
+#### Geoblocked streams: declare the country, the pool is `proxy-pool`
 
-When a source is geoblocked, the scraper may keep its own country-specific
-pool of working proxies and use it for its own requests (`build()`,
-`buildEvents()`, a resolver's handshake):
+The proxies are not each scraper's job. [`scrapers/proxy-pool.mts`](scrapers/proxy-pool.mts)
+is a scraper that returns no channels and exports `proxies` (a `ProxyProvider`,
+see the template): its `build()` rebuilds a per-country pool on the scraper's
+schedule, and live-tv asks it. **A scraper that has a geoblocked stream just
+sets `ScrapedStream.country` ("DE", per stream, so one channel may mix
+countries)** and the host sends every request of that stream -- check,
+playlist, variants, segments, keys, ffmpeg for ClearKey -- through that
+country's proxies, best first, the next on a failure, never limited by the
+household's VPN setting, and never falling back to a direct fetch (no working
+proxy means the stream is unavailable). Needs live-tv 1.14.0 and the
+proxy-pool scraper imported next to yours; without a provider the host drops
+the stream. Do not write your own pool, proxy tester or proxy client.
 
-- **Fetch** candidate lists for the needed country at the start of each
-  run (the nightly/channels job is the natural place), from public proxy
-  lists or the maintainer's configured provider. Treat a list as untrusted
-  data: accept only `http(s)`/`socks` `host:port` entries.
-- **Test every candidate** against the real source, not a generic
-  "is it up" URL: the request that was blocked must now succeed, return
-  the expected shape, and finish within a latency budget. Time it, drop
-  the slow, and keep only the fastest few (a small pool, e.g. 3-5, ranked
-  by latency). Test in parallel with a concurrency cap and a per-proxy
-  timeout so a bad list cannot stall the job past the host's time limit.
-- **Refresh with each run**: re-test the kept proxies, drop any that now
-  fail or got slow, top up from a fresh list, and cache the pool at
-  module level for the calls in between. If no proxy passes, return empty
-  (or last good data) rather than throw.
-- **Never trust the proxy with more than the fetch needs**: send no
-  account cookies or secrets through a public proxy, and verify what
-  comes back as for any other result.
-- **A proxy cannot carry the stream.** `ScrapedStream` is a URL plus
-  static headers, and the host's relay fetches the playlist and segments
-  from the host's own IP; the contract has no per-stream proxy field.
-  So a proxy fixes a geoblock on the scraping/resolving step only. If the
-  stream URLs themselves are blocked or IP-bound, the source needs the
-  host in that country (case 3 below), and a proxy pool does not change
-  that; a per-stream proxy would be a contract change that starts in
-  live-tv (see "Updating the template").
+What `proxy-pool` does (its docstring is the reference; `test/proxy-pool.mts`
+holds it against local fakes):
+
+- **Candidates**: per-country lists (proxifly, the proxyscrape repo,
+  maximilianfeix, the ProxyScrape and GeoNode APIs), whole-world lists that
+  label a country (monosans JSON, Thordata, spys.me, the free-proxy-list.net
+  family's scraped HTML tables), unlabeled whole-world lists geolocated in bulk
+  through ip-api's batch endpoint (TheSpeedX, monosans, clarketm, jetkai,
+  MuRongPIG, ...), and discovery through gfpcom's list of lists (public hosts
+  only). More raw lists go in its `extraLists` setting. Reddit is not a source:
+  unauthenticated reads answer 403 "Blocked" (tried 2026-10-05).
+- **Tests, never believing a list**: the exit country is measured through the
+  proxy; latency and jitter over sequential probes (median, mean consecutive
+  difference); a ~1 MB download over HTTPS through CONNECT for speed. Score
+  0-100 = 35% speed + 25% latency + 20% jitter + 20% reliability; only proxies
+  above the floors (`minScore`, `minMbps`, all probes but 20%) are kept, the
+  best `keepPerCountry` per country.
+- **Feedback**: the host `report`s each proxy's real use; one failure costs 15
+  points, two in a row remove it until the next rebuild.
+- HTTP and SOCKS5/SOCKS4 proxies (`protocols` setting). live-tv 1.15.0 speaks
+  SOCKS itself and hands ffmpeg a loopback HTTP bridge; an older host drops the
+  SOCKS addresses and uses the HTTP ones.
+- **A resolver's own requests**: a resolver is handed a second argument
+  (live-tv 1.15.0), `{ country, fetch }`. `context.fetch(url, { method, headers,
+  body, timeoutMs, country })` leaves through the stream's country's proxies
+  (best first, failing closed) for a geoblocked stream, so the handshake and the
+  video come from the same place; for an ordinary stream it goes out directly,
+  as the resolver's own `fetch` would. `country: ""` forces direct. Use it for
+  every request of a geoblocked resolver; check `context` exists (an older host
+  passes none). A throw from it (no proxy) is a dead mirror, as any resolver throw.
 
 What decides whether the source is deliverable is **the host's own IP**,
 not yours. After working around the block, test the final result the way
@@ -644,15 +658,18 @@ the host will see it:
    parameter in the docstring, and confirm the playlist and a segment
    still play without the workaround on the stream itself.
 2. **Block on the resolve only, stream URLs are open once resolved**
-   (signed URL with no IP binding): research through the proxy, ship the
-   scraper to fetch the same way from the host. Mark it in SOURCES.md as
-   "geoblocked, host must be in <country>" so a deployment elsewhere knows
-   why it returns nothing, and have `build()` return empty rather than
-   throw when the block answers.
+   (signed URL with no IP binding): set `country` on the stream and make the
+   resolver's requests with `context.fetch` (see above); it then works from any
+   host with a proxy for that country. Without the pool (or on a host older
+   than 1.15.0) mark it in SOURCES.md as "geoblocked, host must be in
+   <country>", and have `build()` return empty rather than throw when the
+   block answers.
 3. **Block on the stream/CDN by IP, or the token is bound to the resolving
    IP** (`asn=`, an IP in the token): it plays only from that country.
    Deliver it only if the host runs there; otherwise it is `blocked` in
-   SOURCES.md, naming the country and what the host would need.
+   SOURCES.md, naming the country and what the host would need. (A
+   country-only block with no IP binding in the token is NOT this case any
+   more: set `ScrapedStream.country` and the proxy pool carries it.)
 
 Record in STRATEGIES.md how the block showed itself (status code, body,
 the header it keyed on) and in SOURCES.md which country the source needs,
@@ -713,7 +730,9 @@ live-tv version introduced it. A feature that cannot work on an older live-tv
 should be dropped by the host rather than offered broken (live-tv's AGENTS.md
 has a section for each feature; read it before changing the field).
 
-Contract changes so far: `decoder` (every live-tv), `resolver` (live-tv
+Contract changes so far: `ResolverContext` and SOCKS proxies (1.15.0), `country` +
+`proxies` (1.14.0, geoblocked streams and the per-country proxy provider; see
+"Geoblocks"), `decoder` (every live-tv), `resolver` (live-tv
 1.6.0), `clearKey` (1.8.0, below), `logos` (1.8.0: an optional pair of image
 URLs for one card, drawn side by side; give both sides' flags for a fixture
 and keep `logo` = the first), `headers` (1.9.0; see "What this scraper
