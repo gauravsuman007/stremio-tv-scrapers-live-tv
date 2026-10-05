@@ -563,13 +563,23 @@ async function resolveWith(protocol: ProtocolId, key: string, signal: AbortSigna
  */
 type Served = "live" | "decoy" | "dead";
 
-async function classify(location: string, signal: AbortSignal): Promise<Served> {
+async function classify(location: string, signal: AbortSignal, depth = 0): Promise<Served> {
     try {
         const response = await fetch(location, { signal, headers: { "User-Agent": USER_AGENT, Referer: REFERRER } });
         if (!response.ok) return "dead";
 
         const text = await response.text();
         if (!text.trimStart().startsWith("#EXTM3U")) return "dead";
+
+        /* A master playlist says nothing itself: the decoy may sit behind its first rendition. */
+        if (depth < 2 && /#EXT-X-STREAM-INF/.test(text)) {
+            const variant = text
+                .split("\n")
+                .map((line) => line.trim())
+                .find((line) => line && !line.startsWith("#"));
+
+            if (variant) return classify(new URL(variant, location).toString(), signal, depth + 1);
+        }
 
         if (/#EXT-X-ENDLIST/.test(text)) {
             const seconds = [...text.matchAll(/#EXTINF:([\d.]+)/g)].reduce((sum, hit) => sum + Number(hit[1]), 0);
@@ -687,13 +697,45 @@ async function resolveHandle(handle: string): Promise<ResolvedStream | null> {
     const key = keyOfHandle(handle);
     if (!key) return null;
 
+    const stream = (url: string): ResolvedStream => ({ url, referrer: REFERRER, userAgent: USER_AGENT });
+    /** What this address serves, looked at every time: the site answers a handshake it no longer honours with a well-formed address to a looping clip. */
+    const serves = (url: string): Promise<Served> => withTimeout((signal) => classify(url, signal), 8_000).catch(() => "dead" as Served);
+
+    let tried: ProtocolId | null = null;
+
     for (const force of [false, true]) {
         const protocol = await protocolNow(force);
         if (!protocol) return null;
 
+        tried = protocol;
+
         const url = await withTimeout((signal) => resolveWith(protocol, key, signal), 10_000).catch(() => null);
-        if (url) return { url, referrer: REFERRER, userAgent: USER_AGENT };
+        if (!url) continue;
+
+        /* "dead" is a channel that is down (or geo-fenced), not a wrong handshake: hand it over and let the host's checks say so. */
+        if ((await serves(url)) !== "decoy") return stream(url);
+
+        /* A decoy means the handshake changed under the remembered answer: forget it so the next look re-detects. */
+        detected = null;
     }
+
+    /* Both looks got the clip. Try the OTHER handshake outright -- detection samples a few channels and may have been wrong for this one. */
+    for (const other of PROTOCOL_ORDER) {
+        if (other === tried) continue;
+
+        const url = await withTimeout((signal) => resolveWith(other, key, signal), 10_000).catch(() => null);
+
+        if (url && (await serves(url)) === "live") {
+            detected = { at: Date.now(), protocol: other };
+            activeProtocol = other;
+            console.log(`zlive: ${other} gets a live playlist for ${key} where ${tried} got the decoy`);
+
+            return stream(url);
+        }
+    }
+
+    /* Nothing the site gave was a channel: a dead mirror, which the host moves past. Never the clip. */
+    console.error(`zlive: only the anti-scraper decoy came back for ${key}`);
 
     return null;
 }
@@ -1370,7 +1412,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.7.0",
+    version: "1.8.0",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {
