@@ -222,6 +222,12 @@ interface ScrapedStream {
      * tag a stream with the country that locks it even if some hosts are
      * there. With neither a provider nor a matching exit the stream is kept
      * and is an ordinary dead mirror (the checks rank it down).
+     *
+     * Since 1.16.0 only HTTPS goes through a proxy by default (a free proxy's
+     * operator can read and rewrite plain HTTP): a tagged stream whose address,
+     * or any address its playlists or redirects name, is `http://` is refused
+     * unless the household turned "Allow plain HTTP through proxies" on. Prefer
+     * the HTTPS address of a source when it has one.
      */
     country?: string;
 }

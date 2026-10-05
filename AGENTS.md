@@ -621,6 +621,8 @@ a stream with neither a provider nor a matching exit is kept as an ordinary dead
 mirror, so tag a stream with the country that locks it even though some hosts are
 there. Do not write your own pool, proxy tester or proxy client.
 
+**Prefer the HTTPS address.** Since live-tv 1.16.0 a geoblocked stream whose address (or a segment/redirect it names) is plain `http://` is refused through the pool by default, because a proxy operator can rewrite plain HTTP; the household can allow it under Settings > VPN > Proxies, which also shows how many tagged streams are HTTP. Rewriting `http://` to `https://` is only right when the host really serves it: test it.
+
 **Tag only what the source itself says is locked.** A tag sends the stream through
 free proxies on every host that is not in that country, so a stream that merely
 might be blocked is better left alone. Tagging today: `iptv-org` (a "Geo-blocked"
@@ -761,7 +763,7 @@ live-tv version introduced it. A feature that cannot work on an older live-tv
 should be dropped by the host rather than offered broken (live-tv's AGENTS.md
 has a section for each feature; read it before changing the field).
 
-Contract changes so far: a host that is already in a stream's `country` takes no proxy, and a tagged stream is no longer dropped when no provider is loaded (1.15.1; no field), `ResolverContext` and SOCKS proxies (1.15.0), `country` +
+Contract changes so far: only HTTPS goes through a proxy unless the household allows plain HTTP (1.16.0; no field, host behaviour -- give a geoblocked stream's `https://` address when the source has one), a host that is already in a stream's `country` takes no proxy, and a tagged stream is no longer dropped when no provider is loaded (1.15.1; no field), `ResolverContext` and SOCKS proxies (1.15.0), `country` +
 `proxies` (1.14.0, geoblocked streams and the per-country proxy provider; see
 "Geoblocks"), `decoder` (every live-tv), `resolver` (live-tv
 1.6.0), `clearKey` (1.8.0, below), `logos` (1.8.0: an optional pair of image
