@@ -153,7 +153,8 @@ function teamKey(name) {
  */
 function readFixture(raw) {
     const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
-    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    // A lowercase " x " is the Portuguese/Spanish "versus" ("Cyprus x Latvia"); a capital X is part of a name.
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").replace(/ x (?=\S)/g, " vs ").trim();
     const first = name.search(versus);
     if (first < 0)
         return null;
@@ -1082,7 +1083,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.10.0",
+    version: "1.10.1",
     configSchema,
     build,
     buildEvents

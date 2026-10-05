@@ -103,7 +103,8 @@ function teamKey(name) {
  */
 function readFixture(raw) {
     const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
-    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    // A lowercase " x " is the Portuguese/Spanish "versus" ("Cyprus x Latvia"); a capital X is part of a name.
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").replace(/ x (?=\S)/g, " vs ").trim();
     const first = name.search(versus);
     if (first < 0)
         return null;
@@ -424,7 +425,7 @@ const configSchema = [
 export const streamfreeScraper = {
     id: SCRAPER_ID,
     name: "StreamFree",
-    version: "1.0.1",
+    version: "1.0.2",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,
