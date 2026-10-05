@@ -53,7 +53,7 @@ from a scraper run may be the proxy, not the site.
 |---|---|
 | Proxy pool | `scrapers/proxy-pool.mts`. Returns no channels; exports `proxies` (per-country HTTP proxies, tested for exit country, latency, jitter, HTTPS speed and reliability, scored 0-100). live-tv uses it for any stream with `country` set and lists it on its VPN settings page. Candidates: proxifly, proxyscrape (repo + API), maximilianfeix, GeoNode, monosans, Thordata, spys.me, free-proxy-list.net family, TheSpeedX/clarketm/jetkai/MuRongPIG/vakhov/ShiftyTR/roosterkid/ErcinDedeoglu/Anonym0usWork1221/mmpx12/rdavydov/hideip.me and the lists gfpcom indexes, geolocated via ip-api batch. Reddit rejected: unauthenticated JSON/search/RSS answer 403 (2026-10-05). First live run 2026-10-05: DE gave 4 proxies at 48-78 Mbit/s and 26-61 ms, ES 1; free-proxy supply per country is thin, so expect a handful. 2026-10-05, v1.2.0: US needed ~4000 candidates tested (about 1 in 400 survives) and gave 8 proxies at 80-97, 8-18 Mbit/s; BBC (UK-locked) refuses nearly every free GB proxy -- 3 in ~530 reachable ones got a BBC playlist, and those were flaky and dead within minutes -- yet through one of them the host delivered a real BBC One segment (2026-10-05); a list entry with a leading zero in an address (`078.84.81.60`) once threw out of `build()`, fixed. |
 
-## Implemented (36)
+## Implemented (37)
 
 | Site | Note |
 |---|---|
@@ -100,11 +100,11 @@ gained segment `decoders` (`ScrapedStream.decoder`) and live-tv
 a relay that runs them -- see `dlhd.mts`. The decoder is a straight port of
 `daddyliveplayer.st`'s own `unwrap()`.
 
-## Possible (5)
+## Possible (4)
 
 | Site | What's missing |
 |---|---|
-| [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`, 93 entries). 2026-10-04 (with DoH): `xyzstreams.blog` answers 502 and the bunny.net host says "Domain suspended or not configured" -- the backend is down; retry when it is back. |
+| [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`, 93 entries). 2026-10-04 (with DoH): `xyzstreams.blog` answers 502 and the bunny.net host says "Domain suspended or not configured" -- the backend is down; retry when it is back. 2026-10-05 (again): the channel list is the Sling lineup map in the homepage (89 ids); only 7 (CBS, ESPN, ESPN2, ESPNU, TNT, TBS, NBATV) have a route, via `embed.html?<id>`: `GET https://us2-hlss2.b-cdn.net/api/token` (also `hlss2.b-cdn.net`, `eu-4605069466.duckdns.org`) returns `{iv, token}`; `AES-256-CBC(SHA256("MySuperSecretKey123!"))` decrypts it to a 32-char token; `https://us2-hlss2.b-cdn.net/<id>/mono.ts.m3u8?token=<token>&server=1` with Referer `https://xyzstreams.st/` answers a playlist of TikTok-CDN `.image` segments. But every playlist is FROZEN (`#EXT-X-PROGRAM-DATE-TIME` 2026-09-29 to 2026-10-04) and its signed segments answer 403: the ingest is dead, only the token API is up. Not built; retry when a playlist's date is today. |
 | [AwardStreams](https://awardstreams.pages.dev/) | One hard-coded restream (`streamthe.awardshere.link/out/v2/<id>/index.m3u8`, in `/players/clappr`) that only answers during award shows (404 otherwise). Would need a short-interval task emitting one channel while it's up. Low value. |
 | [NontonGP](https://esp32.nontonx.com/) | MotoGP/F1/WSBK. 2026-10-04: `/formulaplayer1`, `/mgpplayer2`, `/wsbkplayer1`, `/randomplayer` and `/clearkey` hold a hand-pasted pile of m3u8s (base64-wrapped `http://<ip>:<port>/hls/stream.m3u8` behind `edge*.s1stream.cfd`-style hosts, a Jerez 2026 master, an expired footprint.net token); nothing says which is live. Needs a rule for picking the live URL; low value. |
 
