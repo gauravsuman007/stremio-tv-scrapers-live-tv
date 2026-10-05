@@ -206,6 +206,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -269,8 +270,10 @@ function liveGames(html) {
         const league = decode(/<strong>([^<]*)<\/strong>/.exec(body)?.[1] || "");
         const afterLeague = body.split("</span>")[1] || "";
         const title = decode(afterLeague.replace(/<[^>]*>[\s\S]*$/, "")).replace(/:$/, "").trim();
+        /* The list shows each game's tournament logo (`scdnmain.net/assets/tournament/<id>.png`): the competition's, not the sides'. */
+        const logo = /<img [^>]*src="(https:\/\/[^"]+)"/.exec(body)?.[1] || "";
         if (title)
-            games.push({ page: m[1], league, title });
+            games.push({ page: m[1], league, title, logo });
     }
     return games;
 }
@@ -345,7 +348,7 @@ async function fetchEvents() {
         if (!streams.length)
             continue;
         const sport = SPORT_OF_LEAGUE.find(([pattern]) => pattern.test(game.league))?.[1] || "";
-        const described = eventFor(game.title, { competition: game.league, ...(sport ? { sport } : {}) });
+        const described = eventFor(game.title, { competition: game.league, ...(game.logo ? { competitionLogo: game.logo } : {}), ...(sport ? { sport } : {}) });
         channels.push({
             id: idFor(game.page.replace(`${BASE}/`, "").replace(/[^A-Za-z0-9]+/g, "-")),
             name: described.name,
@@ -390,7 +393,7 @@ function buildEvents() {
 export const thetvappScraper = {
     id: SCRAPER_ID,
     name: "TheTVApp",
-    version: "1.0.2",
+    version: "1.1.0",
     configSchema,
     build,
     buildEvents

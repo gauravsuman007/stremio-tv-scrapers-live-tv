@@ -223,6 +223,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -370,6 +371,9 @@ async function buildEvents() {
         if (seen.has(id))
             continue;
         seen.add(id);
+        /* The site publishes both sides' badges and the competition's (`/img?k=` proxies, served as PNG): side, side, competition. */
+        const badge = (url) => (url && /^https:\/\//i.test(url) ? url : "");
+        const pictures = fixture.home && fixture.away && badge(fixture.home_badge) && badge(fixture.away_badge) ? [badge(fixture.home_badge), badge(fixture.away_badge), ...(badge(fixture.league_badge) ? [badge(fixture.league_badge)] : [])] : [];
         channels.push({
             id,
             name: described.name,
@@ -379,7 +383,8 @@ async function buildEvents() {
             countryFlag: "",
             categories: ["sports", ...(sport ? [sport] : [])],
             languages: [],
-            logo: "",
+            logo: pictures[0] || badge(fixture.league_badge),
+            ...(pictures.length ? { logos: pictures } : {}),
             website: SITE,
             network: fixture.league || "",
             streams: feeds.map((channel) => ({
@@ -418,7 +423,7 @@ const configSchema = [
 export const matchoraScraper = {
     id: SCRAPER_ID,
     name: "Matchora",
-    version: "1.0.0",
+    version: "1.1.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,

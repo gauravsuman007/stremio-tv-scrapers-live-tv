@@ -264,6 +264,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -808,7 +809,7 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
                 countryFlag: "",
                 categories: [category],
                 languages: [],
-                logo: "",
+                logo: match.poster ? (match.poster.startsWith("/") ? `https://ntv.st${match.poster}` : /^https:\/\//i.test(match.poster) ? match.poster : "") : "",
                 website: "",
                 network: "",
                 streams: urls.map((url) => ({
@@ -1083,7 +1084,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.10.1",
+    version: "1.11.0",
     configSchema,
     build,
     buildEvents

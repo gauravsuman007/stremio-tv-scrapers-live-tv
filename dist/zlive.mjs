@@ -263,6 +263,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -1252,7 +1253,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.9.0",
+    version: "1.9.1",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {

@@ -240,6 +240,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -512,6 +513,7 @@ async function buildEvents() {
         const described = eventFor(match.title.trim(), {
             ...(sides.length === 2 ? { sides } : {}),
             competition: match.league || "",
+            ...(match.leagueLogo ? { competitionLogo: logoUrl(match.leagueLogo) } : {}),
             sport,
             ...(Number.isFinite(match.timestamp) && (match.timestamp || 0) > 0 ? { start: match.timestamp } : {})
         });
@@ -558,7 +560,7 @@ const configSchema = [
 export const watchfootyScraper = {
     id: SCRAPER_ID,
     name: "WatchFooty",
-    version: "1.0.2",
+    version: "1.1.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,

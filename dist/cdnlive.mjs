@@ -219,6 +219,7 @@ function eventFor(title, extra = {}) {
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -570,6 +571,9 @@ async function buildEvents() {
                 sport,
                 start
             });
+            /* The site's team images (`/api/v1/team/images/<id>`) redirect to TheSportsDB badges: side, side. Its `countryIMG` is the HOST COUNTRY's flag, not the competition's. */
+            const crest = (url) => (url && /^https:\/\//i.test(url) ? url : "");
+            const pictures = sides.length === 2 && crest(event.homeTeamIMG) && crest(event.awayTeamIMG) ? [crest(event.homeTeamIMG), crest(event.awayTeamIMG)] : [];
             channels.push({
                 id,
                 name: described.name,
@@ -579,7 +583,8 @@ async function buildEvents() {
                 countryFlag: "",
                 categories: ["sports", sport],
                 languages: [],
-                logo: "",
+                logo: pictures[0] || "",
+                ...(pictures.length ? { logos: pictures } : {}),
                 website: "https://cdnlivetv.is/",
                 network: described.event.competition || event.tournament || "",
                 streams
@@ -612,7 +617,7 @@ const configSchema = [
 export const cdnliveScraper = {
     id: SCRAPER_ID,
     name: "CDN Live TV",
-    version: "1.2.1",
+    version: "1.3.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,
