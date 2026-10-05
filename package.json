@@ -5,7 +5,7 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "try": "npx tsx",
-        "test": "node scripts/sync-blocks.mjs --check && tsx test/logo-directory.mts && tsx test/event-key.mts && tsx test/proxy-pool.mts && tsx test/geo-tags.mts"
+        "test": "node scripts/sync-blocks.mjs --check && tsx test/logo-directory.mts && tsx test/event-key.mts && tsx test/proxy-pool.mts && tsx test/geo-tags.mts && tsx test/zlive.mts"
     },
     "devDependencies": {
         "@types/node": "^22.10.0",
