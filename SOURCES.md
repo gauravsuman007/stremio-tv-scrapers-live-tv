@@ -53,7 +53,7 @@ from a scraper run may be the proxy, not the site.
 |---|---|
 | Proxy pool | `scrapers/proxy-pool.mts`. Returns no channels; exports `proxies` (per-country HTTP proxies, tested for exit country, latency, jitter, HTTPS speed and reliability, scored 0-100). live-tv uses it for any stream with `country` set and lists it on its VPN settings page. Candidates: proxifly, proxyscrape (repo + API), maximilianfeix, GeoNode, monosans, Thordata, spys.me, free-proxy-list.net family, TheSpeedX/clarketm/jetkai/MuRongPIG/vakhov/ShiftyTR/roosterkid/ErcinDedeoglu/Anonym0usWork1221/mmpx12/rdavydov/hideip.me and the lists gfpcom indexes, geolocated via ip-api batch. Reddit rejected: unauthenticated JSON/search/RSS answer 403 (2026-10-05). First live run 2026-10-05: DE gave 4 proxies at 48-78 Mbit/s and 26-61 ms, ES 1; free-proxy supply per country is thin, so expect a handful. 2026-10-05, v1.2.0: US needed ~4000 candidates tested (about 1 in 400 survives) and gave 8 proxies at 80-97, 8-18 Mbit/s; BBC (UK-locked) refuses nearly every free GB proxy -- 3 in ~530 reachable ones got a BBC playlist, and those were flaky and dead within minutes -- yet through one of them the host delivered a real BBC One segment (2026-10-05); a list entry with a leading zero in an address (`078.84.81.60`) once threw out of `build()`, fixed. |
 
-## Implemented (32)
+## Implemented (33)
 
 | Site | Note |
 |---|---|
@@ -87,6 +87,7 @@ from a scraper run may be the proxy, not the site.
 | [M3UPT](https://github.com/LITUATUI/M3UPT) | `scrapers/m3upt.mts`, ~155 Portuguese channels (the list's `TV` group; its VOD, webcam and radio groups are skipped). `#EXTVLCOPT` User-Agent/Origin/Referer lines are carried onto each stream (RTP needs them). 2026-10-05: 9 of 14 spread samples decode without the options; RTP's need them. |
 | [TDTChannels](https://www.tdtchannels.com/) | `scrapers/tdtchannels.mts`, ~440 24/7 channels with an HLS address (Spanish national, regional and local TV by autonomous community, plus international, music and religious). One JSON (`/lists/tv.json`: countries > ambits > channels > `options[{format,url,geo2,res}]`); YouTube/`stream` options skipped, ad macros dropped from addresses, geo options labelled. 2026-10-05: 12 of 16 spread samples decode from Germany. 2026-10-05: `geo2` SP/CAT options tagged `ES`. |
 | [Rakuten TV](https://rakuten.tv/) | `scrapers/rakuten.mts`, ~105 free linear channels over five markets (DE, ES, FR, IT, UK). `gizmo.rakuten.tv/v3/live_channels` is public; `POST /v3/avod/streamings` (audio language taken from the channel's own label, `subtitle_language: MIS`) answers an AWS MediaTailor master. The market must match the caller's country (`error.geo_market_not_allowed_for_user_market` otherwise), so each channel has one handle per market and the resolver returns null for the markets the host is not in. 2026-10-05 from Germany: the German market resolves and decodes (3 of 4 samples; France 24 is an ffmpeg format quirk, not retested through the relay). 2026-10-05: each market's stream now carries its `country` and the resolver uses `context.fetch`, so every market plays through the proxy pool (not live-tested for the non-home markets). |
+| [Plex Live TV](https://watch.plex.tv/live-tv) | `scrapers/plexlive.mts`, ~2,900 24/7 channels (US, CA, GB, AU, NZ, MX, ES, FR). List: `i.mjh.nz/Plex/.channels.json.gz` (with Plex's shared anonymous `X-Plex-Token` and a per-region `X-Forwarded-For`); stream `epg.provider.plex.tv/library/parts/<id>.m3u8?X-Plex-Token=...`. The geoblock (`Channel not available in current location`) is lifted by the region's `X-Forwarded-For`, sent as the stream's static `headers` (allowed by AGENTS.md's geoblock section). 2026-10-05 from Germany: Wurl, Stingray and galxy hosted channels play (US/CA/AU/FR samples; galxy is AES-128); channels on `*.amagi.tv` playouts 403 under every header set, an address check at the CDN, so they need a proxy in the playout's country (unknown per channel) and are dropped by the host's check. Roughly 6 of 16 spread samples fully decode here. |
 
 ### Formerly backend-blocked
 
@@ -131,7 +132,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (38)
+## Rejected (37)
 
 | Site | Reason |
 |---|---|
@@ -170,6 +171,5 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [Zerostream](https://zerostream.alwaysdata.net/) | Mostly anime/VOD. Live part: a 16-entry gist M3U on a server iptv-org already lists, `tvpass.org` links (TheTVApp family) and `slingtv-proxy` iframes. |
 | [Score808](https://score808hd.tv/) | Dead: Cloudflare 522 (origin timeout) on 2026-09-30. |
 | [VenueVault](https://venuevault.live/) | Dead: Cloudflare 526 (invalid origin certificate) on 2026-09-30. |
-| Plex Live TV (`i.mjh.nz/Plex/.channels.json.gz`, `jmp2.uk/plex-<id>.m3u8`) | 2026-10-04: ~2,900 channels, but the stream answers "Channel not available in current location" unless the request carries a spoofed `X-Forwarded-For` of a US/UK/... address (that is what the list's region `headers` are). Not adopted: it would work by defeating the service's geo-fence. |
 | LG Channels (`lgchannels.com`) | 2026-10-05: `api.lgchannels.com/lineupapi/v1.0/channellist` (headers `X-Device-Country`, `X-Device-Language`, `X-Device-Type: WEB`; the body is base64 of zlib JSON) lists 221 channels for DE, 299 GB, 187 FR (names, ids, providers such as Pluto), but no stream addresses; `/api/v1.0/schedulelist` answers only for the US. Many ids are Pluto's own (`pluto.mts`). Retry only with a real TV session trace.
 | StrikeOut / VIPLeague.vg / 720pStream / embedsports.me | 2026-10-05: one family. Listing pages are plain HTML (`/nfl`, `/nba`, `/live/<sport>/<slug>`), but every stream is an `embed-V2.min.js` iframe on `ninguno.cc/sd0embed/<cat>?...&csrf=...&sec_hash=...` (or `seckyes.cc` session calls) whose player is a window.top-checked, session-guarded obfuscated page with P2P and ad scripts; headless Chromium never reached a playlist. Same shape as the guarded players in the Rejected list; retry only with a manual network trace. |
