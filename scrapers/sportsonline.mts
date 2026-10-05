@@ -1,67 +1,38 @@
 /**
- * WatchFooty (watchfooty.st) -- live football, American football, baseball,
- * basketball, cricket, golf and motorsport as events, each with several feeds.
- * Events only (the site has no 24/7 channels: its API has `/matches/*`
- * and `/sports` and nothing else).
+ * SportsOnline (sportsonline.st; the front keeps changing domain: .si, .st,
+ * sportsonliine.click, sportzonline.click) -- a live-sport schedule in plain
+ * text and a handful of 24/7 sport channels, every one a small player page.
  *
- * THE CHAIN (verified 2026-10-04, no browser)
- * -------------------------------------------
- *   1. `GET https://api.watchfooty.st/api/v1/matches/live` -> `[{ matchId,
- *      title, teams: {home, away: {name, logoUrl}}, league, sport, status
- *      ("in"), timestamp (epoch ms), streams: [{ source, url, quality,
- *      language }] }]`. Only a handful of live matches carry feeds.
- *      A stream's `url` is `https://sportsembed.su/embed/<id>/<slug>/<source>/<n>`
- *      (sources seen: `prime`, `pro`, `deluxe`, `platinum`, `hd`, `delta`,
- *      `hotel`).
- *   2. THE EMBED'S OWN HANDSHAKE -- the part that used to be filed as "WASM
- *      locked". The player (`assets.sportsembed.su/js/stream.js`) loads
- *      `/js/wasm/stream-lock.wasm`, a 44 KB Rust module with **zero imports**
- *      and four exports (`memory` and, in this order, a process function, a
- *      stack-pointer adjuster, an allocator and a deallocator -- their names
- *      carry a build hash, so they are taken by position). It is a black box
- *      that only computes, and it is called exactly as wasm-bindgen would:
- *      `ret = stack(-16); p = alloc(len, 1); write input at p;
- *      process(ret, p, len); (ptr, len) = two i32 at ret; read; dealloc(ptr,
- *      len, 1); stack(16)`. The input is `[op u8][u32 LE n][n bytes]` followed
- *      by length-prefixed fields (`u32 LE length` + bytes):
- *        op 23: [protobuf body][nonce 32]                    -> factor (16 bytes)
- *        op 41: [protobuf body][nonce 32][factor 16]         -> proof (64 ASCII hex)
- *        op 59: [response][live16 || edge16][nonce][factor][tag 8] -> the playlist URL
- *      where the protobuf body is `1:<source> 2:<slug> 3:"<n>" 4:<id>` (strings),
- *      `nonce` is 32 random bytes, `live` is the response header `x-live`
- *      without its `WFTY_EDGE_V3_` prefix (hex), `edge` is `x-edge`, `factor`
- *      the response's `x-client-factor`, and `tag` is `x-body-tag` (base64).
- *      Found by wrapping `WebAssembly.instantiateStreaming` in Playwright with
- *      a substitute instance that logs every call's arguments and memory; the
- *      first byte of an input is checked by the module (a wrong one makes it
- *      return nothing).
- *        POST https://sportsembed.su/api/get
- *          x-client-nonce: base64(nonce)  x-client-factor: base64(factor)
- *          x-client-proof: <proof>        Referer: <the embed url>
- *          body: the protobuf
- *      Any fresh random nonce is accepted. The answer is opaque bytes plus the
- *      three headers above; op 59 turns it into
- *      `https://lbN.wfty.st/secure/<token>/<source>/<slug>/<n>/<id>/<ts>/playlist.m3u8`.
- *   3. The playlist wants `Referer: https://sportsembed.su/`. Its segments are
- *      bare MPEG-TS served as `image/png` from throw-away image hosts
- *      (`upload.glowvideo.ai`, `*.r2.dev`, `*.aliyuncs.com`), 3-6 MB each, so
- *      no decoder is needed. The `delta`/`hotel` feeds are the Streamed
- *      family and are mostly off air (their playlist answers 500); `hd` is
- *      PPV's `embedindia`. Whatever is not on air resolves to `null`.
+ *   1. THE LISTS. `GET <front>/prog.txt` is the schedule: weekday headings
+ *      (`MONDAY`), a legend of the channel slots under each (`HD1 ENGLISH`,
+ *      `BR1 BRAZILIAN`), then `HH:MM   Home x Away | <page url>` lines, one
+ *      per mirror. Times are UK time (checked against another source's
+ *      fixtures: 19:45 here is 20:45 CEST). The same file names the 24/7 list
+ *      (`24/7 CHANNELS <url>`): `NAME - <page url>` lines.
+ *   2. THE CHANNEL PAGE (`.../channels/hd/hd1.php`, Referer the front) is a
+ *      page with one `<iframe src="https://<host>/e/<id>">`.
+ *   3. THE EMBED PAGE holds `window._econfig='...'`, a JSON config hidden in
+ *      layers. The page's own `stream.js` (obfuscator.io, devtools detector
+ *      and all) undoes it with: base64-decode the whole string; cut it into
+ *      four equal parts; in each part drop the 4th character and base64-decode;
+ *      put the parts back in the order 2, 0, 3, 1 (part i goes to slot
+ *      `[2,0,3,1][i]`); join, base64-decode, `JSON.parse`. Nothing is
+ *      evaluated: this is the whole decode. The config's `stream_url_nop2p`
+ *      (else `stream_url`) is a signed `.m3u8` on a throwaway host (port 8443)
+ *      with plain MPEG-TS segments; its `s`/`e` query is a signature and an
+ *      expiry, so it is minted per play.
  *
- * The module is fetched from the site at resolve time (cached for three
- * hours), so a rotation of the module follows. It is run only if it has no
- * imports (it can then compute, nothing else) and its four exports are where
- * they were; a changed op code or layout makes the decrypted text not an
- * address, and the resolver returns `null` -- never throws, never guesses.
+ * Handles, not URLs: each stream's `url` is `https://sportsonline.invalid/<base64url
+ * of the channel page>`, resolved at play time by `resolvers.sportsonline`
+ * (the Referer is the embed host, the playlist is checked and its newest
+ * segment must start with the TS sync byte -- an offline mirror answers a
+ * page without a stream). ffmpeg's own first request to the throwaway host is
+ * answered 403 (a TLS fingerprint check; the host's relay retries at TLS 1.2).
  *
- * Handles, not URLs: the playlist's token is minted per request, so each
- * stream's `url` is a handle (`https://watchfooty.invalid/<base64url of the
- * embed url>`) resolved at play time by `resolvers.watchfooty`.
+ * What returns nothing: a front that no longer serves `prog.txt`; a channel
+ * page without an iframe; an embed page without `_econfig` (the layered decode
+ * changed -- see `readConfig`); a mirror that is offline.
  */
-
-import { randomBytes } from "node:crypto";
-
 // -------------------------------------------------------------------------
 // Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
 // -------------------------------------------------------------------------
@@ -325,6 +296,7 @@ interface ScrapedRail {
     channelIds: string[];
     by?: string;
     group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; sources?: string[]; networks?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -376,7 +348,7 @@ interface Scraper {
     resolvers?: Record<string, StreamResolver>;
     build(): Promise<ScrapedCatalogue>;
 }
-const SCRAPER_ID = "watchfooty";
+const SCRAPER_ID = "sportsonline";
 
 function idFor(rawId: string): string {
     return `live:${SCRAPER_ID}:${rawId}`;
@@ -401,282 +373,272 @@ async function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms = 20
     }
 }
 
-const API = "https://api.watchfooty.st/api/v1";
-const EMBED_HOST = "sportsembed.su";
-const WASM_URL = "https://assets.sportsembed.su/js/wasm/stream-lock.wasm";
-const REFERRER = "https://sportsembed.su/";
-const RESOLVER = "watchfooty";
-const HANDLE_HOST = "watchfooty.invalid";
-const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-const MAX_WASM_BYTES = 1_000_000;
-const WASM_TTL_MS = 3 * 3600_000;
-const MAX_STREAMS = 8;
+
+const FRONTS = ["https://sportsonline.st", "https://sportsonline.si", "https://sportsonline.sx"];
+const RESOLVER = "sportsonline";
+const HANDLE_HOST = "sportsonline.invalid";
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36";
+const ZONE = "Europe/London";
+const BEFORE_MS = 30 * 60 * 1000;
+const AFTER_MS = 6 * 3600_000;
 const CONCURRENCY = 6;
-const BUDGET_MS = 150_000;
+const BUDGET_MS = 120_000;
 
-const SPORT_NAMES: Record<string, string> = { racing: "motorsport", soccer: "football" };
-
-// --- the lock ----------------------------------------------------------------
-
-interface Lock {
-    memory: WebAssembly.Memory;
-    stack(delta: number): number;
-    alloc(length: number, align: number): number;
-    process(ret: number, pointer: number, length: number): void;
-    free(pointer: number, length: number, align: number): void;
+async function get(url: string, referrer = "", ms = 15_000): Promise<Response> {
+    return await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": BROWSER_UA, ...(referrer ? { Referer: referrer } : {}) } }), ms);
 }
 
-let lockCache: { at: number; lock: Promise<Lock | null> } | null = null;
-
-async function loadLock(): Promise<Lock | null> {
-    try {
-        const response = await withTimeout((signal) => fetch(WASM_URL, { signal, headers: { "User-Agent": BROWSER_UA, Referer: REFERRER } }));
-        if (!response.ok) return null;
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (!bytes.length || bytes.length > MAX_WASM_BYTES) return null;
-        const module = await WebAssembly.compile(bytes);
-        if (WebAssembly.Module.imports(module).length !== 0) return null; // only ever run a module that can compute and nothing else
-        const exported = WebAssembly.Module.exports(module);
-        const functions = exported.filter((entry) => entry.kind === "function").map((entry) => entry.name);
-        const memoryName = exported.find((entry) => entry.kind === "memory")?.name;
-        if (functions.length !== 4 || !memoryName) return null;
-        const { exports } = await WebAssembly.instantiate(module, {});
-        const [process, stack, alloc, free] = functions.map((name) => exports[name] as (...args: number[]) => number);
-        if (!process || !stack || !alloc || !free) return null;
-        return {
-            memory: exports[memoryName] as WebAssembly.Memory,
-            stack: (delta) => stack(delta) as number,
-            alloc: (length, align) => alloc(length, align) as number,
-            process: (ret, pointer, length) => void process(ret, pointer, length),
-            free: (pointer, length, align) => void free(pointer, length, align)
-        };
-    } catch {
-        return null;
-    }
+async function text(url: string, referrer = ""): Promise<string> {
+    const response = await get(url, referrer);
+    if (!response.ok) throw new Error(`sportsonline: ${url} answered ${response.status}`);
+    return await response.text();
 }
 
-function getLock(): Promise<Lock | null> {
-    if (!lockCache || Date.now() - lockCache.at > WASM_TTL_MS) {
-        const lock = loadLock();
-        lockCache = { at: Date.now(), lock };
-        void lock.then((value) => { if (!value && lockCache?.lock === lock) lockCache = null; });
-    }
-    return lockCache.lock;
+// --- handles -----------------------------------------------------------------------
+
+function handleFor(page: string): string {
+    return `https://${HANDLE_HOST}/${Buffer.from(page).toString("base64url")}`;
 }
 
-/** One call into the module, the way wasm-bindgen makes it. Synchronous, so calls never interleave. */
-function run(lock: Lock, input: Uint8Array): Uint8Array {
-    const ret = lock.stack(-16);
-    try {
-        const pointer = lock.alloc(input.length, 1);
-        new Uint8Array(lock.memory.buffer).set(input, pointer);
-        lock.process(ret, pointer, input.length);
-        const view = new DataView(lock.memory.buffer);
-        const outPointer = view.getInt32(ret, true);
-        const outLength = view.getInt32(ret + 4, true);
-        if (outLength <= 0 || outLength > 65_536) return new Uint8Array(0);
-        const out = new Uint8Array(lock.memory.buffer).slice(outPointer, outPointer + outLength);
-        lock.free(outPointer, outLength, 1);
-        return out;
-    } finally {
-        lock.stack(16);
-    }
-}
-
-function u32(value: number): Uint8Array {
-    const out = new Uint8Array(4);
-    new DataView(out.buffer).setUint32(0, value, true);
-    return out;
-}
-
-function join(...parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
-    const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
-    let at = 0;
-    for (const part of parts) { out.set(part, at); at += part.length; }
-    return out;
-}
-
-/** `[op][u32 length][first field]` then each further field as `[u32 length][bytes]`. */
-function message(op: number, ...fields: Uint8Array[]): Uint8Array {
-    return join(Uint8Array.of(op), ...fields.map((field) => join(u32(field.length), field)));
-}
-
-function protobuf(...strings: string[]): Uint8Array<ArrayBuffer> {
-    const encoder = new TextEncoder();
-    return join(...strings.map((text, index) => {
-        const bytes = encoder.encode(text);
-        return join(Uint8Array.of(((index + 1) << 3) | 2, bytes.length), bytes);
-    }));
-}
-
-const fromHex = (text: string): Uint8Array => Uint8Array.from(Buffer.from(text, "hex"));
-const fromBase64 = (text: string): Uint8Array => Uint8Array.from(Buffer.from(text, "base64"));
-
-// --- handles ------------------------------------------------------------------
-
-function handleFor(embed: string): string {
-    return `https://${HANDLE_HOST}/${Buffer.from(embed).toString("base64url")}`;
-}
-
-/** The embed address a handle names, only if it is a sportsembed.su embed page. */
-function embedFrom(handle: string): { embed: string; id: string; slug: string; source: string; number: string } | null {
+function pageFrom(handle: string): string | null {
     try {
         const url = new URL(handle);
         if (url.hostname !== HANDLE_HOST) return null;
-        const embed = Buffer.from(url.pathname.slice(1), "base64url").toString();
-        const parsed = new URL(embed);
-        const parts = parsed.pathname.split("/");
-        if (parsed.protocol !== "https:" || parsed.hostname !== EMBED_HOST || parts.length !== 6 || parts[1] !== "embed") return null;
-        const [, , id, slug, source, number] = parts as [string, string, string, string, string, string];
-        return { embed, id, slug, source, number };
+        const page = new URL(Buffer.from(url.pathname.slice(1), "base64url").toString());
+        return page.protocol === "https:" ? page.href : null;
     } catch {
         return null;
     }
 }
 
-// --- resolving ------------------------------------------------------------------
+// --- the embed page ------------------------------------------------------------------
 
-async function playlistFor(handle: string): Promise<string | null> {
-    const target = embedFrom(handle);
-    const lock = await getLock();
-    if (!target || !lock) return null;
-    const body = protobuf(target.source, target.slug, target.number, target.id);
-    const nonce = Uint8Array.from(randomBytes(32));
-    const factor = run(lock, message(23, body, nonce));
-    if (factor.length !== 16) return null;
-    const proof = run(lock, message(41, body, nonce, factor));
-    if (proof.length !== 64) return null;
-    const response = await withTimeout((signal) => fetch(`https://${EMBED_HOST}/api/get`, {
-        method: "POST",
-        signal,
-        body,
-        headers: {
-            "User-Agent": BROWSER_UA,
-            "Content-Type": "application/octet-stream",
-            Origin: `https://${EMBED_HOST}`,
-            Referer: target.embed,
-            "x-client-nonce": Buffer.from(nonce).toString("base64"),
-            "x-client-factor": Buffer.from(factor).toString("base64"),
-            "x-client-proof": Buffer.from(proof).toString()
-        }
-    }));
-    if (!response.ok) return null;
-    const live = response.headers.get("x-live")?.replace(/^WFTY_EDGE_V3_/, "");
-    const edge = response.headers.get("x-edge");
-    const factorBack = response.headers.get("x-client-factor");
-    const tag = response.headers.get("x-body-tag");
-    if (!live || !edge || !factorBack || !tag) return null;
-    const answer = new Uint8Array(await response.arrayBuffer());
-    const text = new TextDecoder().decode(run(lock, message(59, answer, join(fromHex(live), fromBase64(edge)), nonce, fromBase64(factorBack), fromBase64(tag))));
-    return /^https:\/\/[^\s]+\.m3u8/.test(text) ? text : null;
-}
-
-async function get(url: string, ms = 12_000): Promise<Response> {
-    return await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": BROWSER_UA, Referer: REFERRER } }), ms);
-}
-
-/** On air: the playlist lists a newest segment whose first byte is the MPEG-TS sync byte (not an error page, not a wrapped image). */
-async function onAir(master: string): Promise<boolean> {
+/** `window._econfig='...'` -> the config object, or null. The layers are described in the header. */
+function readConfig(html: string): { stream_url?: string; stream_url_nop2p?: string } | null {
+    const blob = /_econfig\s*=\s*'([^']+)'/.exec(html)?.[1];
+    if (!blob) return null;
     try {
-        const masterResponse = await get(master);
-        const masterText = await masterResponse.text();
-        if (!masterResponse.ok || !masterText.includes("#EXTM3U")) return false;
-        const lines = (text: string): string[] => text.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
-        const variant = masterText.includes("#EXT-X-STREAM-INF") ? lines(masterText)[0] : undefined;
-        const variantUrl = variant ? new URL(variant, master).href : master;
-        const variantText = variant ? await (await get(variantUrl)).text() : masterText;
-        const segment = lines(variantText).pop();
+        const decode = (value: string): string => Buffer.from(value, "base64").toString("latin1");
+        const whole = decode(blob);
+        const size = Math.ceil(whole.length / 4);
+        const order = [2, 0, 3, 1];
+        const parts: string[] = [];
+        for (let i = 0; i < 4; i++) {
+            const part = whole.slice(i * size, (i + 1) * size);
+            parts[order[i]!] = decode(part.slice(0, 3) + part.slice(4));
+        }
+        return JSON.parse(decode(parts.join("")));
+    } catch {
+        return null;
+    }
+}
+
+/** On air: the newest segment fetches and is MPEG-TS. */
+async function onAir(playlist: string, referrer: string): Promise<boolean> {
+    try {
+        const body = await text(playlist, referrer);
+        if (!body.includes("#EXTM3U")) return false;
+        const lines = (value: string): string[] => value.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+        const variant = body.includes("#EXT-X-STREAM-INF") ? lines(body)[0] : undefined;
+        const variantUrl = variant ? new URL(variant, playlist).href : playlist;
+        const media = variant ? await text(variantUrl, referrer) : body;
+        const segment = lines(media).pop();
         if (!segment) return false;
-        const response = await get(new URL(segment, variantUrl).href);
+        const response = await get(new URL(segment, variantUrl).href, referrer);
         const reader = response.body?.getReader();
         const first = await reader?.read();
         await reader?.cancel().catch(() => undefined);
-        return response.ok && !!first?.value && first.value[0] === 0x47;
+        return response.ok && first?.value?.[0] === 0x47;
     } catch {
         return false;
     }
 }
 
 async function resolveStream(handle: string): Promise<ResolvedStream | null> {
+    const page = pageFrom(handle);
+    if (!page) return null;
     try {
-        const url = await playlistFor(handle);
-        if (!url || !(await onAir(url))) return null;
-        return { url, referrer: REFERRER, userAgent: BROWSER_UA };
+        const front = `${new URL(page).origin}/`;
+        const embed = /<iframe[^>]+src=["'](https:\/\/[^"']+)["']/i.exec(await text(page, front))?.[1];
+        if (!embed) return null;
+        const embedOrigin = `${new URL(embed).origin}/`;
+        const config = readConfig(await text(embed, front));
+        const address = config?.stream_url_nop2p || config?.stream_url;
+        if (!address || !/^https:\/\//.test(address) || !(await onAir(address, embedOrigin))) return null;
+        return { url: address, referrer: embedOrigin, userAgent: BROWSER_UA };
     } catch {
         return null;
     }
 }
 
-// --- the events -------------------------------------------------------------------
+// --- times -------------------------------------------------------------------------
 
-interface Team { name?: string; logoUrl?: string }
-interface Feed { source?: string; url?: string; quality?: string; language?: string }
-interface Match {
-    matchId?: string;
-    title?: string;
-    teams?: { home?: Team; away?: Team };
-    league?: string;
-    sport?: string;
-    status?: string;
-    timestamp?: number;
-    streams?: Feed[];
+/** The offset (ms) of a zone from UTC at an instant. */
+function zoneOffset(at: number, zone: string): number {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: zone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric"
+    }).formatToParts(new Date(at));
+    const get = (type: string): number => Number(parts.find((part) => part.type === type)?.value);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute")) - Math.floor(at / 60_000) * 60_000;
 }
+
+/** "2026-10-04T14:45" read as a wall-clock time in a zone -> epoch ms, or NaN. */
+function zonedTime(text: string, zone: string): number {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(text || "");
+    if (!m) return NaN;
+    const wall = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+    const first = wall - zoneOffset(wall, zone);
+    return wall - zoneOffset(first, zone);
+}
+
+const WEEKDAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
+
+/** The UK calendar date ("2026-10-05") of a weekday heading: yesterday or one of the next six days. */
+function dateOf(weekday: string, now: number): string | null {
+    const index = WEEKDAYS.indexOf(weekday);
+    if (index < 0) return null;
+    for (let ahead = -1; ahead <= 5; ahead++) {
+        const at = now + ahead * 86_400_000;
+        const day = new Intl.DateTimeFormat("en-GB", { timeZone: ZONE, weekday: "long" }).format(new Date(at)).toUpperCase();
+        if (day === weekday) return new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(at));
+    }
+    return null;
+}
+
+// --- the schedule ----------------------------------------------------------------------
+
+interface Row { start: number; title: string; page: string }
+interface Schedule { rows: Row[]; slots: Map<string, string>; channelList: string; front: string }
+
+/** The slot a channel page belongs to: ".../channels/hd/hd1.php" -> "HD1". */
+function slotOf(page: string): string {
+    return (/\/([a-z0-9]+)\.php/i.exec(page)?.[1] || "").toUpperCase();
+}
+
+async function readSchedule(now = Date.now()): Promise<Schedule> {
+    let lastError: unknown = new Error("sportsonline: no front answered");
+    for (const front of FRONTS) {
+        try {
+            const body = await text(`${front}/prog.txt`);
+            if (!/\d\d:\d\d\s+\S[^|]*\|\s*https?:/.test(body)) continue;
+            const rows: Row[] = [];
+            const slots = new Map<string, string>();
+            let date: string | null = null;
+            let channelList = "";
+            for (const raw of body.split(/\r?\n/)) {
+                const line = raw.replace(/^\uFEFF/, "").trim();
+                const heading = /^([A-Z]{6,9})$/.exec(line)?.[1];
+                if (heading && WEEKDAYS.includes(heading)) { date = dateOf(heading, now); continue; }
+                const list = /^24\/7 CHANNELS\s+(https?:\/\/\S+)/i.exec(line)?.[1];
+                if (list && !channelList) channelList = list;
+                const slot = /^((?:HD|BR)\d+)\s+([A-Z][A-Z &]*)$/.exec(line);
+                if (slot) { slots.set(slot[1]!, slot[2]!.trim()); continue; }
+                const row = /^(\d{2}):(\d{2})\s+(.+?)\s*\|\s*(https:\/\/\S+)$/.exec(line);
+                if (!row || !date) continue;
+                const start = zonedTime(`${date}T${row[1]}:${row[2]}`, ZONE);
+                if (Number.isFinite(start)) rows.push({ start, title: row[3]!.replace(/\s+/g, " ").trim(), page: row[4]! });
+            }
+            return { rows, slots, channelList: channelList || `${front}/247.txt`, front };
+        } catch (cause) {
+            lastError = cause;
+        }
+    }
+    throw lastError;
+}
+
+function streamFor(page: string, slots: Map<string, string>): ScrapedStream {
+    const slot = slotOf(page);
+    const language = slots.get(slot);
+    return {
+        url: handleFor(page),
+        quality: "",
+        labels: [slot, ...(language ? [language.toLowerCase().replace(/^./, (c) => c.toUpperCase())] : [])].filter(Boolean),
+        referrer: "",
+        userAgent: BROWSER_UA,
+        resolver: RESOLVER
+    };
+}
+
+const SPORT_PREFIX: Record<string, string> = {
+    tennis: "tennis", nhl: "hockey", nba: "basketball", nfl: "american football", mlb: "baseball", f1: "motorsport", motogp: "motorsport",
+    ufc: "fighting", boxing: "boxing", golf: "golf", rugby: "rugby", cricket: "cricket", volleyball: "volleyball", handball: "handball"
+};
+
+/** "NHL: Montreal Canadiens @ Carolinas Hurricanes" -> { sport, competition, fixture } */
+function splitTitle(title: string): { fixture: string; competition: string; sport: string } {
+    const m = /^([^:]{2,40}):\s*(.+)$/.exec(title);
+    if (!m) return { fixture: title, competition: "", sport: "" };
+    const lead = m[1]!.trim();
+    const sport = SPORT_PREFIX[lead.toLowerCase().split(/\s+/)[0]!] || "";
+    return { fixture: m[2]!.trim(), competition: lead, sport };
+}
+
+// --- the catalogue -------------------------------------------------------------------
 
 async function build(): Promise<ScrapedCatalogue> {
-    return { channels: [] };
-}
-
-function logoUrl(path: string | undefined): string {
-    return path ? new URL(path, "https://api.watchfooty.st/").href : "";
+    const schedule = await readSchedule();
+    const list = await text(schedule.channelList, schedule.front);
+    const channels: ScrapedChannel[] = [];
+    const seen = new Set<string>();
+    for (const raw of list.split(/\r?\n/)) {
+        const m = /^\s*(.+?)\s+-\s+(https:\/\/\S+\.php)\s*$/.exec(raw.replace(/^\uFEFF/, ""));
+        if (!m) continue;
+        const page = m[2]!;
+        const id = idFor(`channel:${slotOf(page).toLowerCase() || m[1]!.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const name = m[1]!.split(/\s+/).map((word) => (word.length > 3 || /^\d/.test(word) ? word[0] + word.slice(1).toLowerCase() : word)).join(" ").replace(/\b(tv|btv)\b/gi, (word) => word.toUpperCase());
+        channels.push({
+            id,
+            name,
+            country: "",
+            countryName: "",
+            countryFlag: "",
+            categories: ["sports"],
+            languages: [],
+            logo: "",
+            website: schedule.front,
+            network: "SportsOnline",
+            streams: [{ url: handleFor(page), quality: "", labels: [], referrer: "", userAgent: BROWSER_UA, resolver: RESOLVER }]
+        });
+    }
+    if (!channels.length) throw new Error("sportsonline: the 24/7 list was empty");
+    return { channels, rails: [] };
 }
 
 async function buildEvents(): Promise<ScrapedCatalogue> {
-    const response = await withTimeout((signal) => fetch(`${API}/matches/live`, { signal, headers: { "User-Agent": BROWSER_UA } }));
-    if (!response.ok) throw new Error(`watchfooty: /matches/live -> ${response.status}`);
-    const matches = (await response.json()) as Match[];
-
-    // Every feed of every match, checked a few at a time: a feed is kept only if it resolves and its newest segment is video.
-    const jobs: { match: Match; feed: Feed; ok?: boolean }[] = [];
-    for (const match of matches) {
-        if (!match.matchId || !match.title || match.status !== "in") continue;
-        for (const feed of (match.streams || []).slice(0, MAX_STREAMS)) {
-            if (feed.url && feed.url.startsWith(`https://${EMBED_HOST}/embed/`) && embedFrom(handleFor(feed.url))) jobs.push({ match, feed });
-        }
+    const schedule = await readSchedule();
+    const now = Date.now();
+    const groups = new Map<string, { title: string; start: number; pages: string[] }>();
+    for (const row of schedule.rows) {
+        if (now < row.start - BEFORE_MS || now > row.start + AFTER_MS) continue;
+        const key = `${row.start}|${row.title.toLowerCase()}`;
+        const group = groups.get(key) || { title: row.title, start: row.start, pages: [] };
+        if (!group.pages.includes(row.page)) group.pages.push(row.page);
+        groups.set(key, group);
     }
-    const began = Date.now();
+
+    // Keep only mirrors that are on air: resolve each, a few at a time.
+    const checked = new Map<string, boolean>();
+    const jobs = [...new Set([...groups.values()].flatMap((group) => group.pages))];
     let next = 0;
+    const began = Date.now();
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
         while (next < jobs.length && Date.now() - began < BUDGET_MS) {
-            const job = jobs[next++]!;
-            job.ok = !!(await resolveStream(handleFor(job.feed.url!)));
+            const page = jobs[next++]!;
+            checked.set(page, !!(await resolveStream(handleFor(page))));
         }
     }));
 
     const channels: ScrapedChannel[] = [];
     const seen = new Set<string>();
-    for (const match of matches) {
-        const live = jobs.filter((job) => job.match === match && job.ok);
-        const id = idFor(`event:${match.matchId}`);
+    for (const group of groups.values()) {
+        const live = group.pages.filter((page) => checked.get(page));
+        const { fixture, competition, sport } = splitTitle(group.title);
+        const described = eventFor(fixture, { ...(competition ? { competition } : {}), ...(sport ? { sport } : {}), start: group.start });
+        const id = idFor(`event:${group.start}:${described.event.key || fixture.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
         if (!live.length || seen.has(id)) continue;
         seen.add(id);
-        const sport = SPORT_NAMES[(match.sport || "").toLowerCase()] || (match.sport || "").toLowerCase().replace(/-/g, " ");
-        const home = match.teams?.home, away = match.teams?.away;
-        const sides = [home?.name, away?.name].map((side) => (side || "").trim()).filter(Boolean);
-        const described = eventFor(match.title!.trim(), {
-            ...(sides.length === 2 ? { sides } : {}),
-            competition: match.league || "",
-            sport,
-            ...(Number.isFinite(match.timestamp) && (match.timestamp || 0) > 0 ? { start: match.timestamp! } : {})
-        });
-        const logos = [logoUrl(home?.logoUrl), logoUrl(away?.logoUrl)];
-        const streams: ScrapedStream[] = live.map((job, index) => ({
-            url: handleFor(job.feed.url!),
-            quality: "",
-            labels: [[job.feed.source, job.feed.language].filter(Boolean).join(" ") || `Feed ${index + 1}`],
-            referrer: REFERRER,
-            userAgent: BROWSER_UA,
-            resolver: RESOLVER
-        }));
         channels.push({
             id,
             name: described.name,
@@ -684,16 +646,14 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
             country: "",
             countryName: "",
             countryFlag: "",
-            categories: ["sports", sport],
+            categories: ["sports", ...(sport ? [sport] : [])],
             languages: [],
-            logo: logos[0] || "",
-            ...(logos[0] && logos[1] ? { logos } : {}),
-            website: "https://watchfooty.st/",
-            network: described.event.competition || match.league || "",
-            streams
+            logo: "",
+            website: schedule.front,
+            network: described.event.competition || competition,
+            streams: live.map((page) => streamFor(page, schedule.slots))
         });
     }
-
     return {
         channels,
         rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] : []
@@ -702,40 +662,37 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
 
 const configSchema: ScraperConfigField[] = [
     {
+        key: "channelsIntervalMinutes",
+        label: "Channels refresh interval (minutes)",
+        type: "number",
+        default: 720,
+        min: 60,
+        help: "How often the 24/7 channel list is re-read. Each channel is resolved when someone plays it."
+    },
+    {
         key: "eventsIntervalMinutes",
         label: "Events refresh interval (minutes)",
         type: "number",
         default: 15,
         min: 5,
-        help: "How often the live events are re-read. Each feed is resolved when someone plays it."
+        help: "How often the live events are re-read."
     }
 ];
 
-export const watchfootyScraper: Scraper = {
+export const sportsonlineScraper: Scraper = {
     id: SCRAPER_ID,
-    name: "WatchFooty",
-    version: "1.0.2",
+    name: "SportsOnline",
+    version: "1.0.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,
     buildEvents
 };
 
-// -------------------------------------------------------------------------
-// `npx tsx scrapers/watchfooty.mts` -- prints the events and resolves the
-// first stream of the first one.
-// -------------------------------------------------------------------------
+export { readConfig, readSchedule };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-    buildEvents()
-        .then(async (catalogue) => {
-            console.log(`${catalogue.channels.length} events: ${catalogue.channels.map((c) => `${c.name} (${c.streams.length})`).join("; ")}`);
-            const first = catalogue.channels[0];
-            console.log(first || "(none)");
-            if (first?.streams[0]) console.log(await resolveStream(first.streams[0].url));
-        })
-        .catch((cause) => {
-            console.error("buildEvents() threw:", cause);
-            process.exitCode = 1;
-        });
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+    const [catalogue, events] = await Promise.all([build(), buildEvents()]);
+    console.log("channels", catalogue.channels.length, "events", events.channels.length);
+    for (const c of [...catalogue.channels.slice(0, 3), ...events.channels.slice(0, 3)]) console.log(c.name, c.event?.key ?? "", c.streams.length, c.streams[0]?.labels.join("/"));
 }

@@ -49,6 +49,10 @@ ok(sameIn("hockey", "Golden Knights @ Canucks", "Vegas Golden Knights vs Vancouv
 ok(!sameIn("american football", "Chiefs @ Raiders", "Chiefs @ Broncos"), "a shared nickname is not a shared fixture");
 ok(!sameIn("american football", "Giants @ Eagles", "San Francisco Giants vs Philadelphia Phillies"), "the nickname Giants is the sport's own team");
 ok(sameIn("baseball", "Giants @ Padres", "San Francisco Giants vs San Diego Padres"), "Giants are San Francisco in baseball");
+ok(same("Cyprus x Latvia", "Latvia vs Cyprus"), "the Portuguese-style \"x\" is a versus");
+ok(same("Italy x Turkey", "Türkiye @ Italy"), "x merges with a source that writes Türkiye");
+ok(!same("Cyprus x Latvia", "Cyprus x Malta"), "a shared side is not a shared fixture (x)");
+ok(readFixture("Formula X Grand Prix") === null, "an X inside a name is not a versus");
 /* reading a name */
 ok(JSON.stringify(readFixture(`UEFA Nations League : North Macedonia vs Scotland ${FLAG}`)) === JSON.stringify({ sides: ["North Macedonia", "Scotland"], competition: "UEFA Nations League" }), "a competition prefix and a flag come off");
 ok(readFixture("UFC 332: Silva vs Wang")?.competition === "UFC 332", "a card's title is the competition");

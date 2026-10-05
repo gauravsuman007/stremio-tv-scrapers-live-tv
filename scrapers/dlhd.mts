@@ -153,7 +153,8 @@ function teamKey(name: string): string {
  */
 function readFixture(raw: string): { sides: string[]; competition: string } | null {
     const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
-    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    // A lowercase " x " is the Portuguese/Spanish "versus" ("Cyprus x Latvia"); a capital X is part of a name.
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").replace(/ x (?=\S)/g, " vs ").trim();
     const first = name.search(versus);
     if (first < 0) return null;
 
@@ -1148,7 +1149,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const dlhdScraper: Scraper = {
     id: SCRAPER_ID,
     name: "DaddyLive",
-    version: "1.5.0",
+    version: "1.5.1",
     configSchema,
     buildEvents,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
