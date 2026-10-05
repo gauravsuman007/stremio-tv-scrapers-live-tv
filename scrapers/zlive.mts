@@ -424,8 +424,14 @@ async function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms = 20
 
 const BASE = "https://iptv.zlive.st";
 const REFERRER = "https://zlive.st/";
+/** The API's real gate (found 2026-10-05): a request without `Origin:
+ *  https://zlive.st` gets a 200 and a well-formed `location` -- to a live-looking
+ *  stream of a "scrapers go away" card -- whatever the envelope. With it, the
+ *  same envelope returns the real CDN address. Send it on every API call. */
+const ORIGIN = "https://zlive.st";
 const USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const API_HEADERS = { "User-Agent": USER_AGENT, Referer: REFERRER, Origin: ORIGIN };
 
 /** XOR-decoded once from the bundle's obfuscated `Ry`/`Py` byte arrays
  *  (`Ny(Ry, Py)` in the site's own minified code) -- see the module
@@ -470,8 +476,8 @@ function todayKeyDate(): string {
     return `${y}-${m}-${d}`;
 }
 
-type Envelope = { p: string; n: string; g: string; k: string; x?: string };
-type ProtocolId = "v4" | "v3";
+type Envelope = Record<string, string>;
+type ProtocolId = "v5" | "v4" | "v3";
 
 /** AES-GCM-encrypts `payload` under the key `SHA-256(digestInput)` and
  *  returns the body fields both protocols share. */
@@ -501,7 +507,7 @@ async function envelopeV3(payload: unknown, _signal: AbortSignal): Promise<Envel
 /** CURRENT envelope: a one-off nonce from the server is part of the key and
  *  is echoed back as `x`. */
 async function envelopeV4(payload: unknown, signal: AbortSignal): Promise<Envelope> {
-    const response = await fetch(`${BASE}/nonce`, { signal, headers: { "User-Agent": USER_AGENT, Referer: REFERRER } });
+    const response = await fetch(`${BASE}/nonce`, { signal, headers: API_HEADERS });
     if (!response.ok) throw new Error(`/nonce -> ${response.status}`);
 
     const nonce = ((await response.json()) as { n?: string }).n;
@@ -511,21 +517,67 @@ async function envelopeV4(payload: unknown, signal: AbortSignal): Promise<Envelo
     return { ...(await seal(`${nonce}|${dateKey}|${ZLIVE_SALT_V4}|v4`, dateKey, payload)), x: nonce };
 }
 
-const PROTOCOLS: Record<ProtocolId, (payload: unknown, signal: AbortSignal) => Promise<Envelope>> = {
-    v4: envelopeV4,
-    v3: envelopeV3
+/** Protocol "v5" (Oct 2026), read off the live site by hooking `fetch` and
+ *  `crypto.subtle` while it opened a channel (the bundle is string-array
+ *  obfuscated; the hooks gave the whole scheme in one run):
+ *
+ *   1. `GET /session/ticket` -> `{"w": "<22 chars>"}`; call it `w`.
+ *   2. `hmacKey = SHA-256("<ZLIVE_SALT_V5>:<YYYY-MM-DD>")`.
+ *   3. `aesKey = HMAC-SHA256(hmacKey, "<w>|v5")`, used raw as an AES-GCM key.
+ *   4. AES-GCM, random 12-byte IV, `additionalData = utf8(w)`, of
+ *      `{"s": <channel key>, "u": <epoch seconds>}`.
+ *   5. Body `{m: ciphertext, r: iv, u: tag, d: date, q: w}`, all base64.
+ *
+ *  The old handshakes are still answered with a well-formed address, now to a
+ *  LIVE-looking stream of a "scrapers go away" card (no ENDLIST any more), so
+ *  see `looksLikeDecoy` for how that is told apart. */
+const ZLIVE_SALT_V5 = "-eIt_LM4sZrw0-ZofDPQCqfznTuQIS9vmgIxT8vlOzQ";
+
+async function envelopeV5(key: string | null, signal: AbortSignal): Promise<Envelope> {
+    const response = await fetch(`${BASE}/session/ticket`, { signal, headers: API_HEADERS });
+    if (!response.ok) throw new Error(`/session/ticket -> ${response.status}`);
+
+    const ticket = ((await response.json()) as { w?: string }).w;
+    if (!ticket) throw new Error("/session/ticket answered without a ticket");
+
+    const dateKey = todayKeyDate();
+    const hmacKey = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${ZLIVE_SALT_V5}:${dateKey}`));
+    const signer = await crypto.subtle.importKey("raw", hmacKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const aesBytes = await crypto.subtle.sign("HMAC", signer, new TextEncoder().encode(`${ticket}|v5`));
+    const aesKey = await crypto.subtle.importKey("raw", aesBytes, { name: "AES-GCM" }, false, ["encrypt"]);
+
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify(key === null ? { u: Math.floor(Date.now() / 1000) } : { s: key, u: Math.floor(Date.now() / 1000) }));
+    const encrypted = new Uint8Array(
+        await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(ticket) }, aesKey, plaintext)
+    );
+
+    const tagStart = encrypted.length - 16;
+    return {
+        m: Buffer.from(encrypted.slice(0, tagStart)).toString("base64"),
+        r: Buffer.from(iv).toString("base64"),
+        u: Buffer.from(encrypted.slice(tagStart)).toString("base64"),
+        d: dateKey,
+        q: ticket
+    };
+}
+
+const PROTOCOLS: Record<ProtocolId, (key: string | null, signal: AbortSignal) => Promise<Envelope>> = {
+    v5: envelopeV5,
+    v4: (key, signal) => envelopeV4(key === null ? { t: Math.floor(Date.now() / 1000) } : { c: key, t: Math.floor(Date.now() / 1000) }, signal),
+    v3: (key, signal) => envelopeV3(key === null ? { t: Math.floor(Date.now() / 1000) } : { c: key, t: Math.floor(Date.now() / 1000) }, signal)
 };
 
 /** Newest first: when two both look fine, the newer one wins. */
-const PROTOCOL_ORDER: ProtocolId[] = ["v4", "v3"];
+const PROTOCOL_ORDER: ProtocolId[] = ["v5", "v4", "v3"];
 
 /** The protocol the last detection settled on (only used to log a change). */
-let activeProtocol: ProtocolId = "v4";
+let activeProtocol: ProtocolId = "v5";
 
 async function fetchChannelList(signal: AbortSignal): Promise<ZliveChannel[]> {
     const response = await fetch(`${BASE}/channels.json`, {
         signal,
-        headers: { "User-Agent": USER_AGENT, Referer: REFERRER }
+        headers: API_HEADERS
     });
     if (!response.ok) throw new Error(`channels.json -> ${response.status}`);
     return (await response.json()) as ZliveChannel[];
@@ -533,11 +585,11 @@ async function fetchChannelList(signal: AbortSignal): Promise<ZliveChannel[]> {
 
 /** One `/resolve` round trip under an explicit protocol; throws on failure. */
 async function resolveWith(protocol: ProtocolId, key: string, signal: AbortSignal): Promise<string | null> {
-    const envelope = await PROTOCOLS[protocol]({ c: key, t: Math.floor(Date.now() / 1000) }, signal);
+    const envelope = await PROTOCOLS[protocol](key, signal);
     const response = await fetch(`${BASE}/resolve`, {
         method: "POST",
         signal,
-        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, Referer: REFERRER },
+        headers: { "Content-Type": "application/json", ...API_HEADERS },
         body: JSON.stringify(envelope)
     });
     if (!response.ok) return null;
@@ -562,6 +614,59 @@ async function resolveWith(protocol: ProtocolId, key: string, signal: AbortSigna
  * A live channel never has `#EXT-X-ENDLIST`. The decoy is a short VOD with
  * one, which is the whole test.
  */
+/**
+ * THE DECOY'S SECOND FORM (2026-10-05). Without `Origin: https://zlive.st`
+ * (see ORIGIN) `/resolve` hands out `https://iptv.zlive.st/main/secure/<hash>/
+ * <time>/<12 hex>.m3u8` -- a LIVE playlist (no ENDLIST, a moving media
+ * sequence) of a "scrapers go away" card whose segments sit behind
+ * `route.transcode.cfd`. The ENDLIST test cannot see it, and it passed every
+ * check upstream of this scraper, so channels played the card. Real streams
+ * are on other hosts (`<cdn>/main/secure/<hash>/<time>/<channel>.m3u8`).
+ *
+ * Two independent tells, so a change to one does not bring the card back:
+ *  - the ADDRESS shape on the API's own host (free, checked first);
+ *  - the first segment's BYTES: the card is a short loop shared by every
+ *    channel (segments of 40,796 and 85,164 bytes were seen), so each
+ *    segment seen behind an address of the first form is remembered and
+ *    recognised behind any other address.
+ */
+const DECOY_ADDRESS = /^https:\/\/iptv\.zlive\.st\/main\/secure\/[0-9a-f]+\/\d+\/[0-9a-f]{12}\.m3u8$/i;
+const decoyFingerprints = new Set<string>();
+
+async function firstSegmentFingerprint(playlist: string, base: string, signal: AbortSignal): Promise<string | null> {
+    const line = playlist
+        .split("\n")
+        .map((entry) => entry.trim())
+        .find((entry) => entry && !entry.startsWith("#"));
+    if (!line) return null;
+
+    try {
+        const response = await fetch(new URL(line, base), { signal, headers: { "User-Agent": USER_AGENT, Referer: REFERRER } });
+        if (!response.ok) return null;
+
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        return `${bytes.length}:${Buffer.from(digest).toString("hex").slice(0, 16)}`;
+    } catch {
+        return null;
+    }
+}
+
+async function isDecoySegment(playlist: string, location: string, signal: AbortSignal): Promise<boolean> {
+    if (DECOY_ADDRESS.test(location)) {
+        /* Learn the loop (a few segments), so the bytes still give it away if the address shape is changed. */
+        if (decoyFingerprints.size < 32) {
+            const learned = await firstSegmentFingerprint(playlist, location, signal);
+            if (learned) decoyFingerprints.add(learned);
+        }
+
+        return true;
+    }
+
+    const fingerprint = await firstSegmentFingerprint(playlist, location, signal);
+    return fingerprint !== null && decoyFingerprints.has(fingerprint);
+}
+
 type Served = "live" | "decoy" | "dead";
 
 async function classify(location: string, signal: AbortSignal, depth = 0): Promise<Served> {
@@ -587,6 +692,9 @@ async function classify(location: string, signal: AbortSignal, depth = 0): Promi
             if (seconds <= 300) return "decoy";
         }
 
+        /* The current decoy is endless, so the playlist alone cannot give it away: look at its first segment. */
+        if (await isDecoySegment(text, location, signal)) return "decoy";
+
         return "live";
     } catch {
         return "dead";
@@ -605,7 +713,7 @@ async function detectProtocol(channels: ZliveChannel[]): Promise<ProtocolId> {
     }
 
     const keys = [...bySource.values()].slice(0, 4);
-    const score: Record<ProtocolId, number> = { v4: 0, v3: 0 };
+    const score: Record<ProtocolId, number> = { v5: 0, v4: 0, v3: 0 };
 
     for (const protocol of PROTOCOL_ORDER) {
         for (const key of keys) {
@@ -845,11 +953,11 @@ async function fetchLiveEvents(signal: AbortSignal): Promise<ZliveEvent[]> {
     const protocol = await protocolNow();
     if (!protocol) return [];
 
-    const envelope = await PROTOCOLS[protocol]({ t: Math.floor(Date.now() / 1000) }, signal);
+    const envelope = await PROTOCOLS[protocol](null, signal);
     const response = await fetch(`${BASE}/streams`, {
         method: "POST",
         signal,
-        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, Referer: REFERRER },
+        headers: { "Content-Type": "application/json", ...API_HEADERS },
         body: JSON.stringify(envelope)
     });
     if (!response.ok) throw new Error(`/streams -> ${response.status}`);
@@ -1413,7 +1521,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.8.1",
+    version: "1.9.0",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {
