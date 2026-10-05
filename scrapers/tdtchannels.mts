@@ -29,6 +29,8 @@ interface ScrapedStream {
     userAgent: string;
     headers?: Record<string, string>;
     resolver?: string;
+    /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
+    country?: string;
 }
 
 interface ScrapedChannel {
@@ -195,7 +197,7 @@ async function build(): Promise<ScrapedCatalogue> {
                     if (option.format !== "m3u8" || !option.url || !/^https?:\/\//.test(option.url) || streams.length >= MAX_STREAMS) continue;
                     const url = cleanUrl(option.url);
                     if (streams.some((s) => s.url === url)) continue;
-                    streams.push({ url, quality: option.res ? `${option.res}p` : "", labels: option.geo2 ? [`Geo-blocked ${option.geo2}`] : [], referrer: "", userAgent: "" });
+                    streams.push({ url, quality: option.res ? `${option.res}p` : "", labels: option.geo2 ? [`Geo-blocked ${option.geo2}`] : [], referrer: "", userAgent: "", ...(option.geo2 && /^(SP|ES|CAT)$/i.test(option.geo2) ? { country: "ES" } : {}) });
                 }
                 const id = idFor(`${spain ? "es" : "int"}:${name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}`);
                 if (!name || !streams.length || seen.has(id)) continue;
@@ -400,7 +402,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const tdtchannelsScraper: Scraper = {
     id: SCRAPER_ID,
     name: "TDTChannels (Spain)",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 

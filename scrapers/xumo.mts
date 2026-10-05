@@ -34,6 +34,8 @@ interface ScrapedStream {
     labels: string[];
     referrer: string;
     userAgent: string;
+    /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
+    country?: string;
 }
 
 interface ScrapedChannel {
@@ -209,7 +211,7 @@ async function build(): Promise<ScrapedCatalogue> {
             logo: `https://image.xumo.com/v1/channels/channel/${id}/248x140.png?type=color_onBlack`,
             website: "https://play.xumo.com/",
             network: "Xumo Play",
-            streams: [{ url, quality: "", labels: ["Geo-blocked"], referrer: "", userAgent: "" }]
+            streams: [{ url, quality: "", labels: ["Geo-blocked"], referrer: "", userAgent: "", country: "US" }]
         });
     });
 
@@ -397,7 +399,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const xumoScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Xumo Play",
-    version: "1.3.0",
+    version: "1.4.0",
     build
 };
 

@@ -5,7 +5,7 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "try": "npx tsx",
-        "test": "node scripts/sync-event-key.mjs --check && tsx test/event-key.mts && tsx test/proxy-pool.mts"
+        "test": "node scripts/sync-event-key.mjs --check && tsx test/event-key.mts && tsx test/proxy-pool.mts && tsx test/geo-tags.mts"
     },
     "devDependencies": {
         "@types/node": "^22.10.0",

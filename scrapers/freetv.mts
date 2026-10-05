@@ -30,6 +30,8 @@ interface ScrapedStream {
     userAgent: string;
     headers?: Record<string, string>;
     resolver?: string;
+    /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
+    country?: string;
 }
 
 interface ScrapedChannel {
@@ -193,7 +195,9 @@ async function build(): Promise<ScrapedCatalogue> {
         const country = attribute(info, "tvg-country").split(/[;,]/)[0]!.trim().toUpperCase();
         const key = `${country || group}:${name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}`;
         const labels = [/Ⓖ/.test(rawName) ? "Geo-blocked" : "", /Ⓢ/.test(rawName) ? "SD" : ""].filter(Boolean);
-        const stream: ScrapedStream = { url: address, quality: "", labels, referrer: "", userAgent: "" };
+        // Ⓖ is a lock to the channel's own country (the playlist is filed by country).
+        const lockCode = country === "UK" ? "GB" : country;
+        const stream: ScrapedStream = { url: address, quality: "", labels, referrer: "", userAgent: "", ...(/Ⓖ/.test(rawName) && /^[A-Z]{2}$/.test(lockCode) ? { country: lockCode } : {}) };
 
         const known = byKey.get(key);
         if (known) {
@@ -402,7 +406,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const freetvScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Free-TV/IPTV",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 

@@ -30,6 +30,8 @@ interface ScrapedStream {
     labels: string[];
     referrer: string;
     userAgent: string;
+    /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
+    country?: string;
 }
 
 interface ScrapedChannel {
@@ -205,6 +207,8 @@ async function build(): Promise<ScrapedCatalogue> {
             seen.add(entry.nanoid);
 
             const labels = entry.isGeoBlocked ? ["Geo-blocked"] : [];
+            // Famelack files channels by country, and a blocked one is locked to its own.
+            const lock = entry.isGeoBlocked && /^[A-Za-z]{2}$/.test(code) ? { country: code.toUpperCase() === "UK" ? "GB" : code.toUpperCase() } : {};
             channels.push({
                 id: idFor(entry.nanoid),
                 name: entry.name.trim(),
@@ -216,7 +220,7 @@ async function build(): Promise<ScrapedCatalogue> {
                 logo: "",
                 website: "",
                 network: "",
-                streams: urls.map((url) => ({ url, quality: "", labels, referrer: "", userAgent: "" }))
+                streams: urls.map((url) => ({ url, quality: "", labels, referrer: "", userAgent: "", ...lock }))
             });
         }
     }
@@ -405,7 +409,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const famelackScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Famelack",
-    version: "1.3.0",
+    version: "1.4.0",
     build
 };
 

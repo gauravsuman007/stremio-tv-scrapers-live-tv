@@ -19,12 +19,17 @@
  *      Germany the Spanish market answers `error.geo_market_not_allowed_for_user_market`
  *      ("you are in Germany"). So a channel carries one stream per market,
  *      each a handle (`https://rakuten.invalid/<market>/<classification>/<audio>/<id>`)
- *      resolved at play time; on any host only the markets of its own country
- *      play, and the resolver returns `null` for the others (the host drops them).
+ *      resolved at play time. Each stream carries its market's `country`
+ *      (live-tv 1.14.0) and the resolver makes both of its requests through
+ *      `context.fetch` (1.15.0), so the handshake and the video leave from the
+ *      market's own country -- through the proxy pool, or directly on a host
+ *      already there -- and every market plays on any host that has a proxy for
+ *      it. Without a context (an older host) it falls back to its own `fetch`,
+ *      and only the host's own market resolves.
  *
  * Verified 2026-10-05 from a German address: the German market resolves and
  * plays. What returns nothing: a market whose classification id changed
- * (400 -> skipped), the geo check (-> `null`).
+ * (400 -> skipped), the geo check (-> `null`), a country with no working proxy.
  */
 // -------------------------------------------------------------------------
 // Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
@@ -38,6 +43,8 @@ interface ScrapedStream {
     userAgent: string;
     headers?: Record<string, string>;
     resolver?: string;
+    /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
+    country?: string;
 }
 
 interface ScrapedChannel {
@@ -100,7 +107,28 @@ interface ResolvedStream {
     headers?: Record<string, string>;
 }
 
-type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
+interface ResolverFetchOptions {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    timeoutMs?: number;
+    country?: string;
+}
+
+interface ResolverFetched {
+    status: number;
+    url: string;
+    type: string;
+    text: string;
+    bytes: Uint8Array;
+}
+
+interface ResolverContext {
+    country?: string;
+    fetch(url: string, options?: ResolverFetchOptions): Promise<ResolverFetched>;
+}
+
+type StreamResolver = (handle: string, context?: ResolverContext) => Promise<ResolvedStream | null>;
 
 interface Scraper {
     id: string;
@@ -190,15 +218,24 @@ function handleFor(market: string, classification: number, audio: string, id: st
     return `https://${HANDLE_HOST}/${market}/${classification}/${encodeURIComponent(audio)}/${encodeURIComponent(id)}`;
 }
 
-async function resolveStream(handle: string): Promise<ResolvedStream | null> {
+async function resolveStream(handle: string, context?: ResolverContext): Promise<ResolvedStream | null> {
     try {
         const url = new URL(handle);
         if (url.hostname !== HANDLE_HOST) return null;
         const [market, classification, audio, id] = url.pathname.slice(1).split("/").map(decodeURIComponent);
         if (!MARKETS.some((m) => m.market === market) || !/^\d+$/.test(classification || "") || !/^[A-Z]{3}$/.test(audio || "") || !id || !/^[A-Za-z0-9_.-]+$/.test(id)) return null;
-        const response = await withTimeout((signal) => fetch(`${API}/avod/streamings?device_identifier=web&market_code=${market}`, {
+        // The market's own country: the handshake and the video must leave from there.
+        const where = MARKETS.find((m) => m.market === market)!.country;
+        const send = async (address: string, init: { method?: string; headers: Record<string, string>; body?: string }): Promise<{ ok: boolean; text: string }> => {
+            if (context) {
+                const got = await context.fetch(address, { ...init, timeoutMs: 15_000, country: where });
+                return { ok: got.status >= 200 && got.status < 300, text: got.text };
+            }
+            const got = await withTimeout((signal) => fetch(address, { ...init, signal }), 15_000);
+            return { ok: got.ok, text: await got.text() };
+        };
+        const response = await send(`${API}/avod/streamings?device_identifier=web&market_code=${market}`, {
             method: "POST",
-            signal,
             headers: { "Content-Type": "application/json", "User-Agent": BROWSER_UA },
             body: JSON.stringify({
                 audio_language: audio,
@@ -213,13 +250,13 @@ async function resolveStream(handle: string): Promise<ResolvedStream | null> {
                 subtitle_language: "MIS",
                 video_type: "stream"
             })
-        }), 15_000);
+        });
         if (!response.ok) return null;
-        const body = (await response.json()) as { data?: { stream_infos?: { url?: string }[] } };
+        const body = JSON.parse(response.text) as { data?: { stream_infos?: { url?: string }[] } };
         const address = body.data?.stream_infos?.[0]?.url;
         if (!address || !/^https:\/\//.test(address)) return null;
-        const playlist = await withTimeout((signal) => fetch(address, { signal, headers: { "User-Agent": BROWSER_UA } }), 15_000);
-        const text = playlist.ok ? await playlist.text() : "";
+        const playlist = await send(address, { headers: { "User-Agent": BROWSER_UA } });
+        const text = playlist.ok ? playlist.text : "";
         return text.includes("#EXTM3U") ? { url: address, referrer: "", userAgent: BROWSER_UA } : null;
     } catch {
         return null;
@@ -248,7 +285,8 @@ async function build(): Promise<ScrapedCatalogue> {
                 labels: [market.name],
                 referrer: "",
                 userAgent: BROWSER_UA,
-                resolver: RESOLVER
+                resolver: RESOLVER,
+                country: market.country
             };
             const known = byId.get(channel.id);
             if (known) { known.streams.push(stream); continue; }
@@ -453,7 +491,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const rakutenScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Rakuten TV",
-    version: "1.0.0",
+    version: "1.1.0",
     resolvers: { [RESOLVER]: resolveStream },
     build
 };

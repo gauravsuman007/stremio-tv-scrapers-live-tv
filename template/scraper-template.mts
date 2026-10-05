@@ -203,6 +203,27 @@ interface ScrapedStream {
      * key is right is only found out when someone plays it.
      */
     clearKey?: ClearKey;
+    /**
+     * OPTIONAL. ISO 3166-1 alpha-2 ("DE", "gb" is fine: the host upper-cases
+     * it). Says the stream is GEOBLOCKED and must be fetched from an address
+     * in this country. The host then sends EVERY request of the stream --
+     * the check, the playlist, variants, segments, keys, and an ffmpeg session
+     * for ClearKey -- through an HTTP proxy that exits there, chosen from a
+     * proxy provider (`Scraper.proxies`), best first, falling to the next on a
+     * failure. It is never limited by the household's own VPN setting, and it
+     * never falls back to a direct fetch: with no proxy for that country the
+     * stream is simply unavailable, not fetched from the wrong place.
+     *
+     * Because the relay does the fetching, such a stream is never handed to
+     * the television directly. Leave it out for a stream that works from
+     * anywhere. Needs live-tv 1.14.0 (a resolver's own requests: 1.15.0, see `ResolverContext`), `liveFetch` (plugin API 1.2.0) and a
+     * loaded scraper that exports `proxies`. Since 1.15.1 a host that already
+     * exits in that country fetches the stream the ordinary way, no proxy; so
+     * tag a stream with the country that locks it even if some hosts are
+     * there. With neither a provider nor a matching exit the stream is kept
+     * and is an ordinary dead mirror (the checks rank it down).
+     */
+    country?: string;
 }
 
 /**

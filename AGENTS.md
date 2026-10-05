@@ -615,8 +615,25 @@ playlist, variants, segments, keys, ffmpeg for ClearKey -- through that
 country's proxies, best first, the next on a failure, never limited by the
 household's VPN setting, and never falling back to a direct fetch (no working
 proxy means the stream is unavailable). Needs live-tv 1.14.0 and the
-proxy-pool scraper imported next to yours; without a provider the host drops
-the stream. Do not write your own pool, proxy tester or proxy client.
+proxy-pool scraper imported next to yours. Since live-tv 1.15.1 a host that
+already exits in that country fetches the stream the ordinary way (no proxy), and
+a stream with neither a provider nor a matching exit is kept as an ordinary dead
+mirror, so tag a stream with the country that locks it even though some hosts are
+there. Do not write your own pool, proxy tester or proxy client.
+
+**Tag only what the source itself says is locked.** A tag sends the stream through
+free proxies on every host that is not in that country, so a stream that merely
+might be blocked is better left alone. Tagging today: `iptv-org` (a "Geo-blocked"
+label; the country comes from the stream's feed `broadcast_area` when it names
+exactly one, else the channel's own country; an area that cannot be pinned gives no
+tag; "UK" is "GB"), `famelack` (`isGeoBlocked`, the file's country), `freetv` (the
+`Ⓖ` mark, `tvg-country`), `tdtchannels` (`geo2` of SP or CAT: ES), `xumo` (all US:
+`play.xumo.com` sends the rest to `/geo-block`) and `rakuten` (one stream per market,
+the market's country, its resolver on `context.fetch`). Not tagged, on purpose:
+`nzau` (the broadcasters' fences apply to about half of it and nothing says which),
+`pluto` (its region is whatever the SERVER's address is: no parameter, no proxy
+helps), `samsungtvplus`, `rokuchannel` (both decode from Germany), and the sports
+sources (a 403 there is not a stated country). `test/geo-tags.mts` holds it.
 
 What `proxy-pool` does (its docstring is the reference; `test/proxy-pool.mts`
 holds it against local fakes):
@@ -734,7 +751,7 @@ live-tv version introduced it. A feature that cannot work on an older live-tv
 should be dropped by the host rather than offered broken (live-tv's AGENTS.md
 has a section for each feature; read it before changing the field).
 
-Contract changes so far: `ResolverContext` and SOCKS proxies (1.15.0), `country` +
+Contract changes so far: a host that is already in a stream's `country` takes no proxy, and a tagged stream is no longer dropped when no provider is loaded (1.15.1; no field), `ResolverContext` and SOCKS proxies (1.15.0), `country` +
 `proxies` (1.14.0, geoblocked streams and the per-country proxy provider; see
 "Geoblocks"), `decoder` (every live-tv), `resolver` (live-tv
 1.6.0), `clearKey` (1.8.0, below), `logos` (1.8.0: an optional pair of image
