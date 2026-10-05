@@ -1,42 +1,17 @@
 /**
- * Plex Live TV -- Plex's free, ad-supported linear channels (about 2,900
- * across US, Canada, UK, Australia, New Zealand, Mexico, Spain, France).
+ * SVT -- Sweden's public broadcaster: SVT1, SVT2, SVT24, Barnkanalen and
+ * Kunskapskanalen, live.
  *
- *   1. `GET https://i.mjh.nz/Plex/.channels.json.gz` -- the community channel
- *      list (matthuisman's i.mjh.nz): `{ regions: { <cc>: { name, headers:
- *      { "X-Forwarded-For": <an address in that country> } } }, channels: {
- *      <id>: { name, logo, regions: [<cc>], programs } }, headers: {
- *      "X-Plex-Token": <Plex's own shared anonymous token>, ... } }`. The
- *      token is read from the list, not written here.
- *   2. The stream is `https://epg.provider.plex.tv/library/parts/<id>.m3u8?
- *      X-Plex-Token=<token>` -- a master of `variant.m3u8` playlists (their
- *      query carries the session) and AWS MediaTailor segments.
+ *   `GET https://api.svt.se/video/<ch-id>` -> `videoReferences[]: { format,
+ *   url }` with `format: "hls"` (and the DASH variants). The HLS address is a
+ *   stable Akamai master (`svt-live-channel.akamaized.net/l4/se/<channel>/
+ *   master-fmp4.m3u8?format=hls...`). THE GEOBLOCK (2026-10-05, from
+ *   Germany): the API answers, the Akamai master answers 403, as the
+ *   broadcaster licenses its channels for Sweden. No header lifts it, so each
+ *   stream carries `country: "SE"` and a resolver that reads the API
+ *   through `context.fetch` (the address is re-read at play time).
  *
- * THE GEOBLOCK (2026-10-05, from Germany): without a hint Plex answers 404
- * `Channel not available in current location`. The hint the list names, the
- * region's `X-Forwarded-For`, lifts it (200 master), so it is sent as the
- * stream's static `headers` on every request (AGENTS.md, "Geoblocks: working
- * around them is allowed", case 1: a header the scraper can send itself).
- * The stream is not tagged with a `country`: the header is enough, and the
- * proxy pool is for blocks that need an address.
- *
- * Measured 2026-10-05 from Germany with that header: Wurl-, Stingray- and
- * galxy-hosted channels play (the galxy ones are AES-128 encrypted, which an
- * HLS client decrypts). Channels whose segments are `*.amagi.tv/.../beacon/...`
- * addresses (those ARE the segments, not tracking pixels; the playout host
- * names its country, e.g. `...-plex-gb-...`) answer 403 to every header set
- * tried (plain, browser UA, Origin/Referer, with and without the forwarded
- * address): that CDN judges the connecting address itself, which no header
- * lifts (AGENTS.md, Geoblocks case 3). So `build()` reads each channel's
- * playlist (master, first variant) and tags `ScrapedStream.country` only when
- * the segment host is an Amagi playout, taking the country from the host's own
- * name (`...-plex-gb-...` is GB); the proxy pool then carries those and every
- * other channel plays directly. The pass is budgeted (8 minutes, 12 at a time);
- * a channel not reached stays untagged until a later build (the answers are kept in memory).
- *
- * What returns nothing: the list host down (the build throws, the host keeps
- * the last good catalogue); a channel Plex no longer serves (404, dropped by
- * the host's check).
+ * NOT VERIFIED END TO END: only the 403 could be seen from Germany.
  */
 // -------------------------------------------------------------------------
 // Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
@@ -49,6 +24,7 @@ interface ScrapedStream {
     referrer: string;
     userAgent: string;
     headers?: Record<string, string>;
+    resolver?: string;
     /** Where the stream is locked to (live-tv 1.14.0): the host fetches it through that country's proxies. */
     country?: string;
 }
@@ -113,7 +89,28 @@ interface ResolvedStream {
     headers?: Record<string, string>;
 }
 
-type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
+interface ResolverFetchOptions {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    timeoutMs?: number;
+    country?: string;
+}
+
+interface ResolverFetched {
+    status: number;
+    url: string;
+    type: string;
+    text: string;
+    bytes: Uint8Array;
+}
+
+interface ResolverContext {
+    country?: string;
+    fetch(url: string, options?: ResolverFetchOptions): Promise<ResolverFetched>;
+}
+
+type StreamResolver = (handle: string, context?: ResolverContext) => Promise<ResolvedStream | null>;
 
 interface Scraper {
     id: string;
@@ -126,7 +123,7 @@ interface Scraper {
 }
 
 
-const SCRAPER_ID = "plexlive";
+const SCRAPER_ID = "svtplay";
 
 function idFor(rawId: string): string {
     return `live:${SCRAPER_ID}:${rawId}`;
@@ -166,140 +163,63 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item
 }
 
 
-import { gunzipSync } from "node:zlib";
 
-const LIST_URL = "https://i.mjh.nz/Plex/.channels.json.gz";
-const STREAM = "https://epg.provider.plex.tv/library/parts/";
-const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36";
-
-interface PlexList {
-    regions?: Record<string, { name?: string; headers?: Record<string, string> }>;
-    channels?: Record<string, { name?: string; logo?: string; regions?: string[]; programs?: unknown[] }>;
-    headers?: Record<string, string>;
-}
-
-const LANGUAGES: Record<string, string> = { us: "eng", ca: "eng", gb: "eng", au: "eng", nz: "eng", mx: "spa", es: "spa", fr: "fra" };
-
-const CATEGORY_WORDS: [RegExp, string][] = [
-    [/news|noticias|actualit|weather|cnn|abc news|cbs news|nbc news|reuters|bloomberg/i, "news"],
-    [/sport|golf|nfl|nba|mlb|nhl|racing|fight|ufc|wrestl|fifa|futbol|soccer/i, "sports"],
-    [/kids|cartoon|nick|disney|baby|junior|anime|toon/i, "kids"],
-    [/movie|film|cinema|western|horror|thriller|cine\b/i, "movies"],
-    [/music|mtv|vevo|hits|concert/i, "music"],
-    [/doc|nature|wild|history|science|crime|investigat|true/i, "documentary"]
+const RESOLVER = "svtplay";
+const HANDLE_HOST = "svtplay.invalid";
+const API = "https://api.svt.se/video/";
+const CHANNELS: { id: string; name: string; category: string }[] = [
+    { id: "ch-svt1", name: "SVT1", category: "general" },
+    { id: "ch-svt2", name: "SVT2", category: "general" },
+    { id: "ch-svt24", name: "SVT24", category: "news" },
+    { id: "ch-barnkanalen", name: "Barnkanalen", category: "kids" },
+    { id: "ch-kunskapskanalen", name: "Kunskapskanalen", category: "documentary" }
 ];
 
-function flagOf(code: string): string {
-    return /^[a-z]{2}$/i.test(code) ? String.fromCodePoint(...[...code.toUpperCase()].map((ch) => 0x1f1a5 + ch.charCodeAt(0))) : "";
-}
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-const CLASSIFY_CONCURRENCY = 3;
-const CLASSIFY_BUDGET_MS = 8 * 60_000;
-const CLASSIFY_GAP_MS = 250;
-/** Channel id -> its locked country, or "" for a channel that plays directly. Kept between builds so each one finishes what the last could not. */
-const classified = new Map<string, string>();
-let paceUntil = 0;
-
-/** One request, spaced out: Plex answers 429 to a faster pace, and a 429 pauses everyone for its `retry-after` (or 10 s). */
-async function paced(url: string, headers: Record<string, string>): Promise<Response | null> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-        const wait = paceUntil - Date.now();
-        paceUntil = Math.max(paceUntil, Date.now()) + CLASSIFY_GAP_MS;
-        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-        const response = await withTimeout((signal) => fetch(url, { signal, headers }), 12_000);
-        if (response.status !== 429) return response;
-        const seconds = Number(response.headers.get("retry-after")) || 10;
-        paceUntil = Date.now() + Math.min(seconds, 60) * 1000;
+/** The resolver's own requests leave through the stream's country when the host offers a context; an older host falls back to a direct fetch. */
+async function viaContext(context: ResolverContext | undefined, url: string, headers: Record<string, string> = {}): Promise<{ status: number; url: string; text: string }> {
+    if (context) {
+        const got = await context.fetch(url, { headers: { "User-Agent": BROWSER_UA, ...headers }, timeoutMs: 15_000 });
+        return { status: got.status, url: got.url, text: got.text ?? "" };
     }
-    return null;
+    const response = await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": BROWSER_UA, ...headers } }), 15_000);
+    return { status: response.status, url: response.url, text: await response.text() };
 }
 
-/**
- * Where a channel's segments are locked to. A channel's playlist lists its segment host; an Amagi playout
- * host carries its country in its name (`amg00426-...-plex-gb-10225.playouts.now.amagi.tv`) and 403s every
- * request from another country whatever headers it carries. Returns that country (upper case), "" for a
- * channel on another CDN, or null when it could not be read (rate limit, error: try again next build).
- */
-async function lockedCountry(stream: ScrapedStream): Promise<string | null> {
-    const headers = { "User-Agent": stream.userAgent, ...(stream.headers || {}) };
-    const lines = (text: string): string[] => text.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+async function resolveStream(handle: string, context?: ResolverContext): Promise<ResolvedStream | null> {
     try {
-        const master = await paced(stream.url, headers);
-        if (!master?.ok) return null;
-        const variant = lines(await master.text())[0];
-        if (!variant) return null;
-        const variantUrl = new URL(variant, stream.url).href;
-        const media = await paced(variantUrl, headers);
-        if (!media?.ok) return null;
-        const segment = lines(await media.text())[0];
-        if (!segment) return null;
-        const host = new URL(segment, variantUrl).hostname;
-        const found = /(?:^|-)plex-([a-z]{2})-\d+\.playouts\.now\.amagi\.tv$/i.exec(host);
-        return found ? (found[1]!.toLowerCase() === "uk" ? "GB" : found[1]!.toUpperCase()) : "";
+        const url = new URL(handle);
+        if (url.hostname !== HANDLE_HOST) return null;
+        const id = decodeURIComponent(url.pathname.slice(1));
+        if (!CHANNELS.some((channel) => channel.id === id)) return null;
+        const page = await viaContext(context, `${API}${id}`);
+        const references = (JSON.parse(page.text) as { videoReferences?: { format?: string; url?: string }[] }).videoReferences || [];
+        const hls = references.find((reference) => reference.format === "hls") || references.find((reference) => /\.m3u8/.test(reference.url || ""));
+        if (!hls?.url || !/^https:\/\//.test(hls.url)) return null;
+        const master = await viaContext(context, hls.url);
+        if (master.status !== 200 || !master.text.includes("#EXTM3U")) return null;
+        return { url: hls.url, referrer: "", userAgent: BROWSER_UA };
     } catch {
         return null;
     }
 }
 
 async function build(): Promise<ScrapedCatalogue> {
-    const response = await withTimeout((signal) => fetch(LIST_URL, { signal }), 60_000);
-    if (!response.ok) throw new Error(`plexlive: list -> ${response.status}`);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    let text: string;
-    try { text = gunzipSync(bytes).toString("utf8"); } catch { text = bytes.toString("utf8"); }
-    const list = JSON.parse(text) as PlexList;
-    const token = list.headers?.["X-Plex-Token"];
-    if (!token) throw new Error("plexlive: the list names no X-Plex-Token");
-
-    const channels: ScrapedChannel[] = [];
-    for (const [key, channel] of Object.entries(list.channels || {})) {
-        const name = (channel.name || "").trim();
-        const region = (channel.regions || [])[0] || "";
-        const forwarded = list.regions?.[region]?.headers?.["X-Forwarded-For"];
-        if (!name || !/^[A-Za-z0-9_-]{10,80}$/.test(key) || !forwarded) continue;
-        channels.push({
-            id: idFor(key),
-            name,
-            country: region.toUpperCase(),
-            countryName: list.regions?.[region]?.name || region.toUpperCase(),
-            countryFlag: flagOf(region),
-            categories: [CATEGORY_WORDS.find(([pattern]) => pattern.test(name))?.[1] || "entertainment"],
-            languages: LANGUAGES[region] ? [LANGUAGES[region]!] : [],
-            logo: channel.logo || "",
-            website: "https://watch.plex.tv/live-tv",
-            network: "Plex",
-            streams: [{
-                url: `${STREAM}${key}.m3u8?X-Plex-Token=${encodeURIComponent(token)}`,
-                quality: "",
-                labels: [],
-                referrer: "",
-                userAgent: list.headers?.["user-agent"] || BROWSER_UA,
-                headers: { "X-Forwarded-For": forwarded }
-            }]
-        });
-    }
-    if (!channels.length) throw new Error("plexlive: the channel list was empty");
-
-    // Tag the streams whose segments are locked to a country (Amagi playouts); every other channel plays directly.
-    const todo = channels.filter((channel) => !classified.has(channel.id));
-    let next = 0;
-    const began = Date.now();
-    await Promise.all(Array.from({ length: CLASSIFY_CONCURRENCY }, async () => {
-        while (next < todo.length && Date.now() - began < CLASSIFY_BUDGET_MS) {
-            const channel = todo[next++]!;
-            const country = await lockedCountry(channel.streams[0]!);
-            if (country !== null) classified.set(channel.id, country);
-        }
+    const channels: ScrapedChannel[] = CHANNELS.map((channel) => ({
+        id: idFor(channel.id),
+        name: channel.name,
+        country: "SE",
+        countryName: "Sweden",
+        countryFlag: "🇸🇪",
+        categories: [channel.category],
+        languages: ["swe"],
+        logo: "",
+        website: "https://www.svtplay.se/kanaler",
+        network: "SVT",
+        streams: [{ url: `https://${HANDLE_HOST}/${channel.id}`, quality: "", labels: ["Geo-blocked SE"], referrer: "", userAgent: BROWSER_UA, resolver: RESOLVER, country: "SE" }]
     }));
-    for (const channel of channels) {
-        const country = classified.get(channel.id);
-        if (country) {
-            channel.streams[0]!.country = country;
-            channel.streams[0]!.labels = [`Geo-blocked ${country}`];
-        }
-    }
-
-    return { channels, rails: railsFor(channels, SCRAPER_ID, "Plex") };
+    return { channels, rails: railsFor(channels, SCRAPER_ID, "SVT") };
 }
 
 // -------------------------------------------------------------------------
@@ -479,25 +399,19 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
     return rails;
 }
 
-export const plexliveScraper: Scraper = {
+export const svtplayScraper: Scraper = {
     id: SCRAPER_ID,
-    name: "Plex Live TV",
-    version: "1.1.0",
+    name: "SVT Play (Sweden)",
+    version: "1.0.0",
+    resolvers: { [RESOLVER]: resolveStream },
     build
 };
 
-// -------------------------------------------------------------------------
-// `npx tsx scrapers/plexlive.mts` -- prints a channel count and the first channel,
-// then resolves it.
-// -------------------------------------------------------------------------
-
 if (import.meta.url === `file://${process.argv[1]}`) {
     build()
-        .then(async (catalogue) => {
+        .then((catalogue) => {
             console.log(`${catalogue.channels.length} channels, ${(catalogue.rails || []).length} rails`);
-            const first = catalogue.channels[0];
-            console.log(first || "(none)");
-
+            console.log(catalogue.channels[0] || "(none)");
         })
         .catch((cause) => {
             console.error("build() threw:", cause);

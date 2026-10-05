@@ -16,7 +16,10 @@ import { famelackScraper } from "../scrapers/famelack.mts";
 import { freetvScraper } from "../scrapers/freetv.mts";
 import { tdtchannelsScraper } from "../scrapers/tdtchannels.mts";
 import { xumoScraper } from "../scrapers/xumo.mts";
+import { nrktvScraper } from "../scrapers/nrktv.mts";
+import { raiplayScraper } from "../scrapers/raiplay.mts";
 import { rakutenScraper } from "../scrapers/rakuten.mts";
+import { svtplayScraper } from "../scrapers/svtplay.mts";
 
 let checks = 0;
 const ok = (value: unknown, said: string): void => {
@@ -233,6 +236,60 @@ route = (url) => {
     const bad = await resolve("https://rakuten.invalid/xx/1/SPA/ch1", context as never);
 
     ok(bad === null, "rakuten: an unknown market resolves to nothing");
+}
+
+
+// ---- RaiPlay, SVT, NRK: whole-country locks, resolvers on context.fetch ------------
+
+const fakeContext = (answer: (url: string) => { status?: number; url?: string; text?: string }, calls: string[] = []) => ({
+    fetch: async (url: string) => {
+        calls.push(url);
+        const got = answer(url);
+
+        return { status: got.status ?? 200, url: got.url ?? url, type: "", text: got.text ?? "", bytes: new Uint8Array() };
+    }
+});
+
+route = (url) => (url.endsWith("/dirette.json")
+    ? { json: { contents: [{ channel: "Rai 1", path_id: "/dirette/rai1.json", is_live: true }, { channel: "Rai Radio 2", path_id: "/dirette/rairadio2.json", is_live: true }] } }
+    : undefined);
+
+{
+    const channels = await channelsOf(raiplayScraper as never);
+
+    ok(channels.length === 1 && streamsOf(channels, "rai1")[0]?.country === "IT", "raiplay: a channel is locked to Italy and radio is left out");
+
+    const resolve = raiplayScraper.resolvers!.raiplay!;
+    const handle = streamsOf(channels, "rai1")[0]!.url;
+    const page = JSON.stringify({ video: { content_url: "https://mediapolis.rai.it/relinker/relinkerServlet.htm?cont=1" } });
+    const outside = await resolve(handle, fakeContext((url) => (url.includes("/dirette/") ? { text: page } : { url: "https://download-rai-it.akamaized.net/video_no_available.mp4" })) as never);
+    const inside = await resolve(handle, fakeContext((url) => (url.includes("/dirette/") ? { text: page } : { url: "https://rai.example/live/master.m3u8" })) as never);
+
+    ok(outside === null, "raiplay: the decoy video outside Italy resolves to nothing");
+    ok(inside?.url === "https://rai.example/live/master.m3u8", "raiplay: inside Italy the relinker's playlist is returned");
+}
+
+{
+    const channels = await channelsOf(svtplayScraper as never);
+    const calls: string[] = [];
+    const got = await svtplayScraper.resolvers!.svtplay!(streamsOf(channels, "ch-svt1")[0]!.url, fakeContext((url) => (url.includes("api.svt.se")
+        ? { text: JSON.stringify({ videoReferences: [{ format: "dash", url: "https://s.example/a.mpd" }, { format: "hls", url: "https://s.example/m.m3u8" }] }) }
+        : { text: "#EXTM3U\n" }), calls) as never);
+
+    ok(channels.every((channel) => channel.streams[0]?.country === "SE"), "svtplay: every channel is locked to Sweden");
+    ok(got?.url === "https://s.example/m.m3u8" && calls.length === 2, "svtplay: the HLS reference is taken and its master checked through context.fetch");
+}
+
+{
+    const channels = await channelsOf(nrktvScraper as never);
+    const handle = streamsOf(channels, "nrk1")[0]!.url;
+    const blocked = await nrktvScraper.resolvers!.nrktv!(handle, fakeContext(() => ({ text: JSON.stringify({ reason: "blocked", messageType: "ChannelIsGeoblocked" }) })) as never);
+    const open = await nrktvScraper.resolvers!.nrktv!(handle, fakeContext((url) => (url.includes("psapi")
+        ? { text: JSON.stringify({ playable: { assets: [{ url: "https://n.example/m.m3u8", format: "HLS" }] } }) }
+        : { text: "#EXTM3U\n" })) as never);
+
+    ok(streamsOf(channels, "nrk1")[0]?.country === "NO", "nrktv: a channel is locked to Norway");
+    ok(blocked === null && open?.url === "https://n.example/m.m3u8", "nrktv: the geoblock answer resolves to nothing, an open manifest to its playlist");
 }
 
 globalThis.fetch = real;
