@@ -91,7 +91,7 @@ const CONFIG_SCHEMA = [
     { key: "extraLists", label: "Extra raw proxy-list URLs (comma-separated)", type: "string", default: "", help: "Plain text, one ip:port per line." },
     { key: "concurrency", label: "Proxies tested at once", type: "number", default: 150, min: 1, max: 400 },
     { key: "probes", label: "Latency probes per proxy", type: "number", default: 5, min: 3, max: 20 },
-    { key: "budgetSeconds", label: "Longest a rebuild may run (seconds)", type: "number", default: 1500, min: 30, max: 3600 },
+    { key: "budgetSeconds", label: "Longest a rebuild may run (seconds)", type: "number", default: 7200, min: 30, max: 21600, help: "Re-testing what is held comes first and a country that still has enough good proxies is skipped, so most rebuilds end long before this." },
     { key: "latencyUrl", label: "Latency test URL", type: "string", default: "http://cp.cloudflare.com/generate_204" },
     { key: "speedUrl", label: "Speed test URL (https)", type: "string", default: "https://speed.cloudflare.com/__down?bytes=1000000" },
     {
@@ -102,6 +102,27 @@ const CONFIG_SCHEMA = [
     }
 ];
 const RAW = "https://raw.githubusercontent.com";
+/** English name of a country (`GB` -> "United Kingdom"), for sources that file by name. */
+function regionName(country) {
+    try {
+        return new Intl.DisplayNames(["en"], { type: "region" }).of(country) || country;
+    }
+    catch {
+        return country;
+    }
+}
+const FINEPROXY_REGION = {
+    GB: "europe", DE: "europe", FR: "europe", ES: "europe", IT: "europe", NL: "europe", PT: "europe", PL: "europe", SE: "europe",
+    US: "north-america", CA: "north-america", MX: "north-america",
+    BR: "south-america", AR: "south-america",
+    IN: "asia", JP: "asia", KR: "asia", SG: "asia", TR: "asia",
+    AU: "oceania"
+};
+/** fineproxy files by region and country name; a country outside the table has no page that is known. */
+function fineproxyUrl(country) {
+    const region = FINEPROXY_REGION[country];
+    return region ? `https://fineproxy.org/free-proxies/${region}/${regionName(country).toLowerCase().replace(/[^a-z]+/g, "-")}/` : "";
+}
 const SOURCES = {
     perCountry: [
         {
@@ -135,6 +156,26 @@ const SOURCES = {
             parse: (body, country) => labelled(parseList(body), country)
         },
         {
+            name: "proxyfreeonly",
+            url: (country) => `https://proxyfreeonly.com/api/free-proxy-list?limit=500&page=1&country=${country}&sortBy=lastChecked&sortType=desc`,
+            parse: (body, country) => parseProxyFreeOnly(body, country)
+        },
+        {
+            name: "fineproxy",
+            url: (country) => fineproxyUrl(country),
+            parse: (body, country) => parseFineproxy(body, country)
+        },
+        ...["http", "socks5", "socks4"].map((scheme) => ({
+            name: `proxyhub-${scheme}`,
+            url: (country) => `https://proxyhub.me/en/${country.toLowerCase()}-${scheme}-proxy-list.html`,
+            parse: (body, country) => parseProxyHub(body, country, scheme)
+        })),
+        ...["http", "https", "socks4", "socks5"].map((kind) => ({
+            name: `proxygenerator-${kind}`,
+            url: (country) => `${RAW}/proxygenerator1/ProxyGenerator/main/Stable/country/${encodeURIComponent(regionName(country))}/${kind}.txt`,
+            parse: (body, country) => labelled(parseList(body, kind === "https" ? "http" : kind), country)
+        })),
+        {
             name: "geonode",
             url: (country) => `https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&country=${country}&protocols=http`,
             parse: (body, country) => parseGeonode(body, country)
@@ -144,6 +185,9 @@ const SOURCES = {
         { name: "monosans-json", url: `${RAW}/monosans/proxy-list/main/proxies.json`, parse: parseMonosans },
         { name: "thordata", url: `${RAW}/Thordata/awesome-free-proxy-list/main/docs/data/http.json`, parse: parseThordata },
         { name: "spys.me", url: "https://spys.me/proxy.txt", parse: parseSpys },
+        { name: "databay-http", url: `${RAW}/databay-labs/free-proxy-list/master/http.txt`, parse: (body) => plain(body) },
+        { name: "databay-socks5", url: `${RAW}/databay-labs/free-proxy-list/master/socks5.txt`, parse: (body) => plain(body, "socks5") },
+        { name: "databay-socks4", url: `${RAW}/databay-labs/free-proxy-list/master/socks4.txt`, parse: (body) => plain(body, "socks4") },
         { name: "free-proxy-list.net", url: "https://free-proxy-list.net/", parse: parseTable },
         { name: "sslproxies.org", url: "https://www.sslproxies.org/", parse: parseTable },
         { name: "us-proxy.org", url: "https://www.us-proxy.org/", parse: parseTable },
@@ -232,7 +276,7 @@ function settingsOf(config = {}) {
         extraLists: splitUrls(text(config.extraLists, "")),
         concurrency: num(config.concurrency, 150, 1, 400),
         probes: Math.round(num(config.probes, 5, 3, 20)),
-        budgetMs: num(config.budgetSeconds, 1500, 30, 3600) * 1000,
+        budgetMs: num(config.budgetSeconds, 7200, 30, 21600) * 1000,
         latencyUrl: text(config.latencyUrl, "http://cp.cloudflare.com/generate_204"),
         speedUrl: text(config.speedUrl, "https://speed.cloudflare.com/__down?bytes=1000000"),
         geoUrls: geo,
@@ -727,6 +771,49 @@ function parseTable(html) {
     }
     return found;
 }
+/** `proxyfreeonly.com/api/free-proxy-list`: `[{ ip, port, country, protocols: ["socks5", ...] }]`. */
+function parseProxyFreeOnly(body, country) {
+    const data = json(body);
+    const found = [];
+    if (!Array.isArray(data))
+        return found;
+    for (const entry of data) {
+        if (!entry || typeof entry.ip !== "string" || !Array.isArray(entry.protocols))
+            continue;
+        const code = typeof entry.country === "string" && /^[A-Za-z]{2}$/.test(entry.country) ? entry.country.toUpperCase() : country;
+        for (const name of entry.protocols) {
+            const scheme = schemeOf(String(name).toLowerCase() === "https" ? "http" : String(name));
+            const url = scheme ? proxyUrl(entry.ip, String(entry.port), scheme) : null;
+            if (url)
+                found.push({ url, country: code });
+        }
+    }
+    return found;
+}
+/** `fineproxy.org/free-proxies/<region>/<country>/`: rows with `a.b.c.d<span>:port</span>` and one "on" chip per protocol. */
+function parseFineproxy(html, country) {
+    const found = [];
+    for (const row of html.matchAll(/class="fpb-ip">((?:\d{1,3}\.){3}\d{1,3})<span class="fpb-ip-port">:(\d{2,5})<\/span>([\s\S]*?)<\/tr>/g)) {
+        for (const chip of row[3].matchAll(/fpb-proto on">([A-Z0-9]+)</g)) {
+            const name = chip[1].toLowerCase();
+            const scheme = schemeOf(name === "https" ? "http" : name);
+            const url = scheme ? proxyUrl(row[1], row[2], scheme) : null;
+            if (url)
+                found.push({ url, country });
+        }
+    }
+    return found;
+}
+/** `proxyhub.me/en/<cc>-<protocol>-proxy-list.html`: `ip-text` and `port-text` cells; the page's protocol is in its address. */
+function parseProxyHub(html, country, scheme) {
+    const found = [];
+    for (const row of html.matchAll(/class="ip-text"[^>]*>((?:\d{1,3}\.){3}\d{1,3})<[\s\S]*?class="port-text">(\d{2,5})</g)) {
+        const url = proxyUrl(row[1], row[2], scheme);
+        if (url)
+            found.push({ url, country });
+    }
+    return found;
+}
 /** A public http(s) address: nothing loopback, private or link-local, so a discovered list cannot aim the scraper inward. */
 function publicUrl(value) {
     let url;
@@ -838,9 +925,10 @@ async function gather(countries, cfg, deadline) {
     for (const country of countries) {
         for (const source of cfg.sources.perCountry) {
             jobs.push(async () => {
-                if (Date.now() > deadline)
+                const address = source.url(country);
+                if (Date.now() > deadline || !address)
                     return;
-                for (const found of source.parse(await get(source.url(country)), country))
+                for (const found of source.parse(await get(address), country))
                     add(found, source.name);
             });
         }
@@ -937,20 +1025,32 @@ async function limited(items, limit, stop, work) {
     }
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
 }
-/** Rebuild one country: re-test what is kept, then try fresh candidates. */
-async function refreshCountry(country, deadline, gathered) {
+/** A proxy that scores this or more counts toward "enough" for a country. */
+const GOOD_SCORE = 70;
+/**
+ * Rebuild one country: re-test what is held, and unless that already leaves
+ * `keep` good proxies, try fresh candidates. Returns whether the country has
+ * enough good proxies (so the caller can move on without reading any list).
+ */
+async function refreshCountry(country, deadline, gathered, pass = { retest: true, fill: true }) {
     const cfg = settings;
     const results = new Map();
     const timeUp = () => Date.now() > deadline;
     // What we already hold is tested first: it was good, and it costs nothing to find.
     const held = pool.get(country) || [];
-    await limited(held, cfg.concurrency, timeUp, async (entry) => {
-        const verdict = await testProxy(entry.url, country, entry.source, cfg);
-        if (verdict.ok)
-            results.set(entry.url, verdict.info);
-    });
-    const good = () => [...results.values()].filter((entry) => entry.score >= 70).length;
-    if (good() < cfg.keep && !timeUp()) {
+    if (pass.retest) {
+        await limited(held, cfg.concurrency, timeUp, async (entry) => {
+            const verdict = await testProxy(entry.url, country, entry.source, cfg);
+            if (verdict.ok)
+                results.set(entry.url, verdict.info);
+        });
+    }
+    else {
+        for (const entry of held)
+            results.set(entry.url, entry);
+    }
+    const good = () => [...results.values()].filter((entry) => entry.score >= GOOD_SCORE).length;
+    if (pass.fill && good() < cfg.keep && !timeUp()) {
         const seen = new Set(held.map((entry) => entry.url));
         const fresh = (gathered ?? (await gather([country], cfg, deadline)).get(country) ?? []).filter((candidate) => !seen.has(candidate.url));
         // The small per-country lists are tested first; a bulk list that names tens of
@@ -976,18 +1076,28 @@ async function refreshCountry(country, deadline, gathered) {
     else if (!timeUp())
         pool.delete(country);
     save();
+    return good() >= cfg.keep;
 }
-function refreshOne(country, budgetMs, gathered) {
+function refreshOne(country, budgetMs, gathered, pass) {
     const running = flights.get(country);
     if (running)
         return running;
-    const work = refreshCountry(country, Date.now() + budgetMs, gathered)
-        .catch((cause) => console.error(`proxy-pool: refresh of ${country} failed`, cause))
+    const work = refreshCountry(country, Date.now() + budgetMs, gathered, pass)
+        .catch((cause) => {
+        console.error(`proxy-pool: refresh of ${country} failed`, cause);
+        return false;
+    })
         .finally(() => flights.delete(country));
     flights.set(country, work);
     return work;
 }
-/** Every configured country (and any other already held), oldest first, inside the budget. */
+/**
+ * Every configured country (and any other already held), oldest first, inside
+ * the budget, in two passes. First every country's held proxies are re-tested
+ * (a handful each, so it is quick); a country that still has enough good ones
+ * is DONE and costs no list read and no fresh test. Only the others are
+ * gathered and filled up, in the same order.
+ */
 async function refreshAll() {
     load();
     const deadline = Date.now() + settings.budgetMs;
@@ -997,19 +1107,34 @@ async function refreshAll() {
         return stamps.length ? Math.min(...stamps) : 0;
     };
     const order = [...wanted].sort((a, b) => age(a) - age(b));
-    // Lists are read once for every country, within a third of the budget; testing gets the rest.
-    const candidates = await gather(order, settings, Date.now() + settings.budgetMs / 3);
     // A few countries at once; each already runs `concurrency` tests, so the
     // bound that matters is the one inside the country.
-    let next = 0;
-    async function lane() {
-        while (next < order.length && Date.now() < deadline) {
-            const country = order[next];
-            next += 1;
-            await refreshOne(country, Math.max(1_000, deadline - Date.now()), candidates.get(country) ?? []);
+    async function each(countries, work, lanes) {
+        let next = 0;
+        async function lane() {
+            while (next < countries.length && Date.now() < deadline) {
+                const country = countries[next];
+                next += 1;
+                await work(country);
+            }
         }
+        await Promise.all(Array.from({ length: Math.min(lanes, countries.length) }, lane));
     }
-    await Promise.all(Array.from({ length: Math.min(3, order.length) }, lane));
+    // Pass 1: re-test what is held. A country with enough good proxies is finished.
+    const needy = [];
+    await each(order, async (country) => {
+        const enough = await refreshOne(country, Math.max(1_000, deadline - Date.now()), undefined, { retest: true, fill: false });
+        if (!enough)
+            needy.push(country);
+    }, 6);
+    if (!needy.length || Date.now() >= deadline)
+        return;
+    // Pass 2: lists are read once for the countries that still need proxies, within a
+    // third of what is left (and 15 minutes at most); testing gets the rest.
+    const candidates = await gather(needy, settings, Date.now() + Math.min(15 * 60_000, (deadline - Date.now()) / 3));
+    await each(needy, async (country) => {
+        await refreshOne(country, Math.max(1_000, deadline - Date.now()), candidates.get(country) ?? [], { retest: false, fill: true });
+    }, 3);
 }
 // -------------------------------------------------------------------------
 // The provider the host asks
@@ -1065,7 +1190,7 @@ async function build(context) {
 export const proxyPoolScraper = {
     id: SCRAPER_ID,
     name: "Proxy pool (per-country HTTP proxies)",
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema: CONFIG_SCHEMA,
     proxies: provider,
     build
@@ -1078,6 +1203,11 @@ export const __test = {
     parseThordata,
     parseSpys,
     parseTable,
+    parseProxyFreeOnly,
+    parseFineproxy,
+    parseProxyHub,
+    fineproxyUrl,
+    refreshAll,
     publicUrl,
     gather,
     geolocate,
