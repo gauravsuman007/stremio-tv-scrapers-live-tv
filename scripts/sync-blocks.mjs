@@ -3,7 +3,7 @@
 // A scraper opts in by holding the block's `// BEGIN <name>` ... `// END <name>` markers.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
-const BLOCKS = ["event-key", "logo-directory"];
+const BLOCKS = ["event-key", "logo-directory", "stream-language"];
 let stale = 0;
 
 for (const name of BLOCKS) {
