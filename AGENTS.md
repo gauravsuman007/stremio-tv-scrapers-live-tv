@@ -807,7 +807,7 @@ The host (live-tv) knows no sport and no team. Whether "Canada vs Peru" and
 scraper carries the same `event-key` block between `// BEGIN event-key` and
 `// END event-key` markers -- scrapers are standalone files and cannot import
 one another, so it is copied. **Edit `scripts/event-key.block.ts`, then run
-`node scripts/sync-event-key.mjs`** (`npm test` fails when a copy differs, and
+`node scripts/sync-blocks.mjs`** (`npm test` fails when a copy differs, and
 runs `test/event-key.mts`, which holds the rules: aliases, "FC", rankings, "(w)",
 accents, "v." and "@", and everything that must NOT merge). A new events scraper
 starts from `template/scraper-template.mts`, which already carries the block
@@ -853,3 +853,17 @@ longer needed for this: a scraper that used them to refresh the two halves apart
 (ntvst, dlhd, ...) now just returns fresh data from each function. A source that
 is all events returns `{ channels: [] }` from `build()`. If a long crawl can outlive
 the host's time limit (ntvst), keep it single-flight so the next call joins it.
+
+## Missing logos: the `logo-directory` block
+
+Sources that publish no logo (famelack, vavoo, vipotv, ntvst, dlhd, zlive,
+jestone, freetv) or whose logo host is dead from the server (vavoo's
+`logo.huhu.to`, cdnlive's 401 images) borrow one from iptv-org's `channels.json`
++ `logos.json` by NAME: the same folded name or alternate name in the same
+country, else a name of 5+ characters that has exactly one logo anywhere. A logo
+a source supplied is kept unless its predicate says the host is dead. Measured
+on the held results of 2026-10-05: 10,348 of 17,080 logo-less or dead-logo
+channels get one. `scripts/logo-directory.block.ts` is copied into each scraper
+by `scripts/sync-blocks.mjs` (which also keeps `event-key`); `test/logo-directory.mts`
+holds the rules. Nothing here is the host's job: the host only shows the logo it
+is handed and falls back to another source's (`Channel.altLogos`).
