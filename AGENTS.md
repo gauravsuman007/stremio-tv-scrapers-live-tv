@@ -591,18 +591,49 @@ worth recognising *before* spending a research session on:
 Working around a geoblock is explicitly permitted, on any source, without
 asking the maintainer first. A source that refuses your address by country (a region-locked API, a
 `geo`/`country` check, a CDN that 403s outside one market) is not a dead
-end by itself. You may work around it **for research**, to learn what the
-source serves and how:
+end by itself. You may work around it, both while researching a source and inside the
+shipped scraper, as described below:
 
 - Reach it from the right country through a VPN, a SOCKS/HTTP proxy, or a
   remote shell on a host there; or send the country hint the site's own
   client sends (an `X-Forwarded-For`/`CF-IPCountry`-style header, a
   `?country=` or market parameter, a region cookie). Use DoH for a
   DNS-level block (see "Check what a source really serves").
-- Do not ship proxy credentials, VPN endpoints or a third-party relay in a
-  scraper, and do not route `build()` or a resolver through a proxy you
-  run: nothing in the contract can rely on one, and the host would not
-  have it.
+- A shipped scraper may carry and use proxies, including credentials for
+  a proxy the maintainer supplies (read them from the scraper's
+  `configSchema`, never hard-code a secret in the source).
+
+#### Proxy pools: fetched and tested by the scraper itself
+
+When a source is geoblocked, the scraper may keep its own country-specific
+pool of working proxies and use it for its own requests (`build()`,
+`buildEvents()`, a resolver's handshake):
+
+- **Fetch** candidate lists for the needed country at the start of each
+  run (the nightly/channels job is the natural place), from public proxy
+  lists or the maintainer's configured provider. Treat a list as untrusted
+  data: accept only `http(s)`/`socks` `host:port` entries.
+- **Test every candidate** against the real source, not a generic
+  "is it up" URL: the request that was blocked must now succeed, return
+  the expected shape, and finish within a latency budget. Time it, drop
+  the slow, and keep only the fastest few (a small pool, e.g. 3-5, ranked
+  by latency). Test in parallel with a concurrency cap and a per-proxy
+  timeout so a bad list cannot stall the job past the host's time limit.
+- **Refresh with each run**: re-test the kept proxies, drop any that now
+  fail or got slow, top up from a fresh list, and cache the pool at
+  module level for the calls in between. If no proxy passes, return empty
+  (or last good data) rather than throw.
+- **Never trust the proxy with more than the fetch needs**: send no
+  account cookies or secrets through a public proxy, and verify what
+  comes back as for any other result.
+- **A proxy cannot carry the stream.** `ScrapedStream` is a URL plus
+  static headers, and the host's relay fetches the playlist and segments
+  from the host's own IP; the contract has no per-stream proxy field.
+  So a proxy fixes a geoblock on the scraping/resolving step only. If the
+  stream URLs themselves are blocked or IP-bound, the source needs the
+  host in that country (case 3 below), and a proxy pool does not change
+  that; a per-stream proxy would be a contract change that starts in
+  live-tv (see "Updating the template").
 
 What decides whether the source is deliverable is **the host's own IP**,
 not yours. After working around the block, test the final result the way
