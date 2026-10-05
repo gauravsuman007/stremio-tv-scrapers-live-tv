@@ -30,6 +30,33 @@ async function grab(name) {
         throw new Error(`${name}.json -> ${response.status}`);
     return (await response.json());
 }
+/**
+ * The country a "Geo-blocked" stream is locked to, for `ScrapedStream.country`
+ * (the host then fetches it through that country's proxies, or directly when it
+ * already exits there). iptv-org writes the lock as a label only; where it
+ * applies is the stream's FEED's `broadcast_area` (`c/US`, `c/UK`, `r/EUR`...)
+ * and failing that the channel's own country. Measured 2026-10-05: of 1,014
+ * geo-blocked streams 784 have a feed that names exactly one country, and 27 of
+ * those differ from the channel's (a UK channel's US-only amagi feed). An area
+ * of several countries that does not include the channel's own, or none that
+ * can be named, gives no country: tagging a guess would send a stream that may
+ * play anywhere through a stranger's proxy. iptv-org's "UK" is "GB" to a proxy.
+ */
+function geoCountry(area, channelCountry) {
+    const code = (value) => {
+        const upper = (value || "").trim().toUpperCase();
+        return /^[A-Z]{2}$/.test(upper) ? (upper === "UK" ? "GB" : upper) : undefined;
+    };
+    const named = (area || []).filter((entry) => entry.startsWith("c/")).map((entry) => code(entry.slice(2))).filter((entry) => Boolean(entry));
+    const own = code(channelCountry);
+    if (own && named.includes(own))
+        return own;
+    if (named.length === 1)
+        return named[0];
+    if (!(area || []).length)
+        return own;
+    return undefined;
+}
 async function build() {
     /*
         All six at once, and all six have to arrive. A half-built catalogue
@@ -47,6 +74,8 @@ async function build() {
     ]);
     const banned = new Set(blocked.map((entry) => entry.channel));
     const mirrors = new Map();
+    const areas = new Map(rawFeeds.filter((feed) => feed.id).map((feed) => [`${feed.channel}/${feed.id}`, feed.broadcast_area || []]));
+    const homes = new Map(rawChannels.map((channel) => [channel.id, channel.country]));
     for (const raw of rawStreams) {
         // A stream with no channel is one nobody has matched to a name yet
         // -- no country, no category, no logo -- so it cannot be placed on
@@ -54,12 +83,15 @@ async function build() {
         if (!raw.channel || banned.has(raw.channel))
             continue;
         const list = mirrors.get(raw.channel) || [];
+        const labels = raw.labels || [];
+        const country = labels.includes("Geo-blocked") ? geoCountry(raw.feed ? areas.get(`${raw.channel}/${raw.feed}`) : undefined, homes.get(raw.channel)) : undefined;
         list.push({
             url: raw.url,
             quality: raw.quality || "",
-            labels: raw.labels || [],
+            labels,
             referrer: raw.referrer || "",
-            userAgent: raw.user_agent || ""
+            userAgent: raw.user_agent || "",
+            ...(country ? { country } : {})
         });
         mirrors.set(raw.channel, list);
     }
@@ -443,7 +475,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: false, l
 export const iptvOrgScraper = {
     id: "iptv-org",
     name: "iptv-org",
-    version: "1.4.0",
+    version: "1.5.0",
     build
 };
 // -------------------------------------------------------------------------

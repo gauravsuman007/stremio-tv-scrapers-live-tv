@@ -110,7 +110,9 @@ async function build() {
         const country = attribute(info, "tvg-country").split(/[;,]/)[0].trim().toUpperCase();
         const key = `${country || group}:${name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}`;
         const labels = [/Ⓖ/.test(rawName) ? "Geo-blocked" : "", /Ⓢ/.test(rawName) ? "SD" : ""].filter(Boolean);
-        const stream = { url: address, quality: "", labels, referrer: "", userAgent: "" };
+        // Ⓖ is a lock to the channel's own country (the playlist is filed by country).
+        const lockCode = country === "UK" ? "GB" : country;
+        const stream = { url: address, quality: "", labels, referrer: "", userAgent: "", ...(/Ⓖ/.test(rawName) && /^[A-Z]{2}$/.test(lockCode) ? { country: lockCode } : {}) };
         const known = byKey.get(key);
         if (known) {
             if (!known.streams.some((s) => s.url === address))
@@ -298,7 +300,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const freetvScraper = {
     id: SCRAPER_ID,
     name: "Free-TV/IPTV",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 // -------------------------------------------------------------------------

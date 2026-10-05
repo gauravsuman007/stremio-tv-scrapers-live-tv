@@ -120,7 +120,7 @@ async function build() {
             logo: `https://image.xumo.com/v1/channels/channel/${id}/248x140.png?type=color_onBlack`,
             website: "https://play.xumo.com/",
             network: "Xumo Play",
-            streams: [{ url, quality: "", labels: ["Geo-blocked"], referrer: "", userAgent: "" }]
+            streams: [{ url, quality: "", labels: ["Geo-blocked"], referrer: "", userAgent: "", country: "US" }]
         });
     });
     if (!channels.length)
@@ -284,7 +284,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const xumoScraper = {
     id: SCRAPER_ID,
     name: "Xumo Play",
-    version: "1.3.0",
+    version: "1.4.0",
     build
 };
 // -------------------------------------------------------------------------

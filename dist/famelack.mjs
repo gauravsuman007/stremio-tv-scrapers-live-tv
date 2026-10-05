@@ -120,6 +120,8 @@ async function build() {
                 continue;
             seen.add(entry.nanoid);
             const labels = entry.isGeoBlocked ? ["Geo-blocked"] : [];
+            // Famelack files channels by country, and a blocked one is locked to its own.
+            const lock = entry.isGeoBlocked && /^[A-Za-z]{2}$/.test(code) ? { country: code.toUpperCase() === "UK" ? "GB" : code.toUpperCase() } : {};
             channels.push({
                 id: idFor(entry.nanoid),
                 name: entry.name.trim(),
@@ -131,7 +133,7 @@ async function build() {
                 logo: "",
                 website: "",
                 network: "",
-                streams: urls.map((url) => ({ url, quality: "", labels, referrer: "", userAgent: "" }))
+                streams: urls.map((url) => ({ url, quality: "", labels, referrer: "", userAgent: "", ...lock }))
             });
         }
     }
@@ -296,7 +298,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const famelackScraper = {
     id: SCRAPER_ID,
     name: "Famelack",
-    version: "1.3.0",
+    version: "1.4.0",
     build
 };
 // -------------------------------------------------------------------------
