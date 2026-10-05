@@ -176,3 +176,21 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [VenueVault](https://venuevault.live/) | Dead: Cloudflare 526 (invalid origin certificate) on 2026-09-30. |
 | LG Channels (`lgchannels.com`) | 2026-10-05: `api.lgchannels.com/lineupapi/v1.0/channellist` (headers `X-Device-Country`, `X-Device-Language`, `X-Device-Type: WEB`; the body is base64 of zlib JSON) lists 221 channels for DE, 299 GB, 187 FR (names, ids, providers such as Pluto), but no stream addresses; `/api/v1.0/schedulelist` answers only for the US. Many ids are Pluto's own (`pluto.mts`). Retry only with a real TV session trace.
 | StrikeOut / VIPLeague.vg / 720pStream / embedsports.me | 2026-10-05: one family. Listing pages are plain HTML (`/nfl`, `/nba`, `/live/<sport>/<slug>`), but every stream is an `embed-V2.min.js` iframe on `ninguno.cc/sd0embed/<cat>?...&csrf=...&sec_hash=...` (or `seckyes.cc` session calls) whose player is a window.top-checked, session-guarded obfuscated page with P2P and ad scripts; headless Chromium never reached a playlist. Same shape as the guarded players in the Rejected list; retry only with a manual network trace. |
+
+## Event pictures per source (2026-10-05)
+
+What each events source publishes, for the host's merge (a card keeps a `logo`/`logos` from any source; the live-tv logo builder fills a card nobody pictured, see live-tv AGENTS.md "An event no source gave a picture"):
+
+| Source | Gives |
+|---|---|
+| matchora | `home_badge`, `away_badge`, `league_badge` (all three: `logos`) |
+| cdnlive | `homeTeamIMG`/`awayTeamIMG` (redirect to TheSportsDB badges): `logos`. `countryIMG` is the host country's flag, unused. |
+| watchfooty | team `logoUrl` pair, plus `leagueLogo` as `competitionLogo` |
+| pitsport | `logo` is the competition's (fixture: `competitionLogo`; a session keeps it as its picture) |
+| thetvapp | the tournament logo on each list row (`scdnmain.net/assets/tournament/<id>.png`): `competitionLogo` |
+| streamed | home/away badges (`logos`) |
+| cricweb, crichd | the two sides' flags (`logos`) |
+| zlive | the event `thumbnail` (a poster) |
+| ppv, futbolx, streamfree, timstreams | one poster/thumbnail per event |
+| ntvst | `poster` on the site's own curated entries only; fixtures have none |
+| dlhd, sportsonline, roxiestreams | nothing: schedule text/tables only (dlhd's home page images are PPV promos). The host builds crests/flags for these. |

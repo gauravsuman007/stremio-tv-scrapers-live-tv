@@ -399,6 +399,8 @@ interface ScrapedEvent {
     title?: string;
     /** "UEFA Nations League", "UFC 332", "Friendlies". Shown, never matched on. */
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     /** "football", "cricket", "mma", "darts" ... lowercase, free text. */
     sport?: string;
     /** Scheduled start, EPOCH MILLISECONDS. Omit when unknown -- never 0. */
@@ -431,10 +433,14 @@ interface ScrapedChannel {
      * Leave it out for an ordinary channel. When it is present, `logo` must
      * still be set (to the first picture): a host that predates this field
      * shows `logo` alone, and a card whose logo is empty is given a name pill.
-     * Direct image URLs, as `logo`; at most the first two are used. The
+     * Direct image URLs, as `logo`; at most the first three are used. The
      * pair is only drawn when BOTH could be fetched; otherwise the card falls
-     * back to `logo`. When two sources' cards for the same event merge, the
-     * merged card takes `logo` and `logos` from whichever source has them.
+     * back to `logo`. A THIRD picture (live-tv 1.22.0) is the competition's
+     * badge ("FIFA ASEAN Cup"), drawn small under the pair; it is optional
+     * and a badge that cannot be fetched just leaves the pair. When two
+     * sources' cards for the same event merge, the merged card takes `logo`
+     * and `logos` from whichever source has them, and a competition badge
+     * from any.
      */
     logos?: string[];
     /**
@@ -915,7 +921,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -938,6 +944,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }

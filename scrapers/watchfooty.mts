@@ -85,6 +85,8 @@ interface ScrapedEvent {
     keys?: string[];
     title?: string;
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     sport?: string;
     /** Epoch milliseconds; omitted when unknown. */
     start?: number;
@@ -272,7 +274,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -295,6 +297,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -616,6 +619,8 @@ interface Match {
     title?: string;
     teams?: { home?: Team; away?: Team };
     league?: string;
+    /** The competition's logo, a path on the API (`/api/v1/league-logo/<id>`, served as WebP). */
+    leagueLogo?: string;
     sport?: string;
     status?: string;
     timestamp?: number;
@@ -665,6 +670,7 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
         const described = eventFor(match.title!.trim(), {
             ...(sides.length === 2 ? { sides } : {}),
             competition: match.league || "",
+            ...(match.leagueLogo ? { competitionLogo: logoUrl(match.leagueLogo) } : {}),
             sport,
             ...(Number.isFinite(match.timestamp) && (match.timestamp || 0) > 0 ? { start: match.timestamp! } : {})
         });
@@ -714,7 +720,7 @@ const configSchema: ScraperConfigField[] = [
 export const watchfootyScraper: Scraper = {
     id: SCRAPER_ID,
     name: "WatchFooty",
-    version: "1.0.2",
+    version: "1.1.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,

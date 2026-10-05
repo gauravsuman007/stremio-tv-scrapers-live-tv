@@ -63,6 +63,8 @@ interface ScrapedEvent {
     keys?: string[];
     title?: string;
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     sport?: string;
     /** Epoch milliseconds; omitted when unknown. */
     start?: number;
@@ -250,7 +252,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -273,6 +275,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -450,7 +453,7 @@ async function resolveStream(handle: string): Promise<ResolvedStream | null> {
 
 interface EventChannel { id?: string; name?: string; country?: string; quality?: string; lang?: string; dead?: boolean; embed_url?: string }
 interface Fixture {
-    id?: string; home?: string; away?: string; league?: string; sport?: string; kickoff?: number; live?: boolean; finished?: boolean;
+    id?: string; home?: string; away?: string; home_badge?: string; away_badge?: string; league_badge?: string; league?: string; sport?: string; kickoff?: number; live?: boolean; finished?: boolean;
     channels?: EventChannel[];
 }
 
@@ -511,6 +514,9 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
         const id = idFor(`event:${fixtureId}`);
         if (seen.has(id)) continue;
         seen.add(id);
+        /* The site publishes both sides' badges and the competition's (`/img?k=` proxies, served as PNG): side, side, competition. */
+        const badge = (url: string | undefined): string => (url && /^https:\/\//i.test(url) ? url : "");
+        const pictures = fixture.home && fixture.away && badge(fixture.home_badge) && badge(fixture.away_badge) ? [badge(fixture.home_badge), badge(fixture.away_badge), ...(badge(fixture.league_badge) ? [badge(fixture.league_badge)] : [])] : [];
         channels.push({
             id,
             name: described.name,
@@ -520,7 +526,8 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
             countryFlag: "",
             categories: ["sports", ...(sport ? [sport] : [])],
             languages: [],
-            logo: "",
+            logo: pictures[0] || badge(fixture.league_badge),
+            ...(pictures.length ? { logos: pictures } : {}),
             website: SITE,
             network: fixture.league || "",
             streams: feeds.map((channel) => ({
@@ -561,7 +568,7 @@ const configSchema: ScraperConfigField[] = [
 export const matchoraScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Matchora",
-    version: "1.0.0",
+    version: "1.1.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,

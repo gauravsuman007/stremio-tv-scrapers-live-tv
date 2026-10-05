@@ -63,6 +63,8 @@ interface ScrapedEvent {
     keys?: string[];
     title?: string;
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     sport?: string;
     /** Epoch milliseconds; omitted when unknown. */
     start?: number;
@@ -250,7 +252,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -273,6 +275,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -412,6 +415,7 @@ interface CdnEvent {
     homeTeam?: string;
     awayTeam?: string;
     homeTeamIMG?: string;
+    awayTeamIMG?: string;
     tournament?: string;
     start?: string;
     end?: string;
@@ -750,6 +754,9 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
                 sport,
                 start
             });
+            /* The site's team images (`/api/v1/team/images/<id>`) redirect to TheSportsDB badges: side, side. Its `countryIMG` is the HOST COUNTRY's flag, not the competition's. */
+            const crest = (url: string | undefined): string => (url && /^https:\/\//i.test(url) ? url : "");
+            const pictures = sides.length === 2 && crest(event.homeTeamIMG) && crest(event.awayTeamIMG) ? [crest(event.homeTeamIMG), crest(event.awayTeamIMG)] : [];
             channels.push({
                 id,
                 name: described.name,
@@ -759,7 +766,8 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
                 countryFlag: "",
                 categories: ["sports", sport],
                 languages: [],
-                logo: "",
+                logo: pictures[0] || "",
+                ...(pictures.length ? { logos: pictures } : {}),
                 website: "https://cdnlivetv.is/",
                 network: described.event.competition || event.tournament || "",
                 streams
@@ -795,7 +803,7 @@ const configSchema: ScraperConfigField[] = [
 export const cdnliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "CDN Live TV",
-    version: "1.2.1",
+    version: "1.3.0",
     configSchema,
     resolvers: { [RESOLVER]: resolveStream },
     build,

@@ -48,6 +48,8 @@ interface ScrapedEvent {
     keys?: string[];
     title?: string;
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     sport?: string;
     /** Epoch milliseconds; omitted when unknown. */
     start?: number;
@@ -235,7 +237,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -258,6 +260,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -382,7 +385,7 @@ function decode(text: string): string {
         .replace(/\s+/g, " ").trim();
 }
 
-interface Game { page: string; league: string; title: string }
+interface Game { page: string; league: string; title: string; logo: string }
 
 /** The games the home page badges live. */
 function liveGames(html: string): Game[] {
@@ -393,7 +396,9 @@ function liveGames(html: string): Game[] {
         const league = decode(/<strong>([^<]*)<\/strong>/.exec(body)?.[1] || "");
         const afterLeague = body.split("</span>")[1] || "";
         const title = decode(afterLeague.replace(/<[^>]*>[\s\S]*$/, "")).replace(/:$/, "").trim();
-        if (title) games.push({ page: m[1]!, league, title });
+        /* The list shows each game's tournament logo (`scdnmain.net/assets/tournament/<id>.png`): the competition's, not the sides'. */
+        const logo = /<img [^>]*src="(https:\/\/[^"]+)"/.exec(body)?.[1] || "";
+        if (title) games.push({ page: m[1]!, league, title, logo });
     }
     return games;
 }
@@ -466,7 +471,7 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
         if (!streams.length) continue;
 
         const sport = SPORT_OF_LEAGUE.find(([pattern]) => pattern.test(game.league))?.[1] || "";
-        const described = eventFor(game.title, { competition: game.league, ...(sport ? { sport } : {}) });
+        const described = eventFor(game.title, { competition: game.league, ...(game.logo ? { competitionLogo: game.logo } : {}), ...(sport ? { sport } : {}) });
         channels.push({
             id: idFor(game.page.replace(`${BASE}/`, "").replace(/[^A-Za-z0-9]+/g, "-")),
             name: described.name,
@@ -516,7 +521,7 @@ function buildEvents(): Promise<ScrapedCatalogue> {
 export const thetvappScraper: Scraper = {
     id: SCRAPER_ID,
     name: "TheTVApp",
-    version: "1.0.2",
+    version: "1.1.0",
     configSchema,
     build,
     buildEvents

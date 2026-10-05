@@ -107,4 +107,8 @@ ok(eventFor("x", { sides: ["Peru", "Canada"] }).event.key === key("Canada vs Per
 ok(eventFor("Live").event.key === undefined, "a title too short to identify anything gets no key");
 ok(eventFor("UEFA Nations League : Peru vs Canada").name === "Peru vs Canada", "the card is named by who is in it");
 
+ok(eventFor("Peru vs Canada", { competitionLogo: "https://x.test/l.png" } as never).event.competitionLogo === "https://x.test/l.png", "a competition logo is carried onto the event");
+ok(eventFor("Peru vs Canada", { competitionLogo: "javascript:alert(1)" } as never).event.competitionLogo === undefined, "only an http(s) address is carried");
+ok(eventFor("Peru vs Canada").event.competitionLogo === undefined, "none given, none stated");
+
 console.log(`event-key: ${checks} checks ok`);

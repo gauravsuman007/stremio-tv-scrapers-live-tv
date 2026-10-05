@@ -61,6 +61,8 @@ interface ScrapedEvent {
     keys?: string[];
     title?: string;
     competition?: string;
+    /** The competition's own logo as the source publishes it (live-tv 1.22.0): a badge under the sides' crests, never the card's `logo`. */
+    competitionLogo?: string;
     sport?: string;
     /** Epoch milliseconds; omitted when unknown. */
     start?: number;
@@ -248,7 +250,7 @@ function fullTeamName(name: string, sport: string | undefined): string {
  */
 function eventFor(
     title: string,
-    extra: { sides?: string[]; sport?: string; competition?: string; start?: number } = {}
+    extra: { sides?: string[]; sport?: string; competition?: string; competitionLogo?: string; start?: number } = {}
 ): { name: string; event: ScrapedEvent } {
     const found = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
     const fixture = found && extra.sport ? { ...found, sides: found.sides.map((side) => fullTeamName(side, extra.sport)) } : found;
@@ -271,6 +273,7 @@ function eventFor(
             ...(key ? { key } : {}),
             ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
             ...(competition ? { competition } : {}),
+            ...(extra.competitionLogo && /^https?:\/\//i.test(extra.competitionLogo) ? { competitionLogo: extra.competitionLogo } : {}),
             ...(extra.sport ? { sport: extra.sport } : {}),
             ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
         }
@@ -654,6 +657,7 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
         const described = eventFor(entry.titleText.trim(), {
             ...(named.length >= 2 ? { sides: named } : {}),
             ...(competition ? { competition } : {}),
+            ...(named.length >= 2 && https(entry.logo) ? { competitionLogo: https(entry.logo) } : {}),
             ...(sportOf(competition) ? { sport: sportOf(competition) } : {}),
             ...(entry.sessionStart && entry.sessionStart > 0 ? { start: entry.sessionStart * 1000 } : {})
         });
@@ -666,7 +670,8 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
             countryFlag: "",
             categories: ["sports", ...(sportOf(competition) ? [sportOf(competition).replace(/ /g, "-")] : [])],
             languages: [],
-            logo: https(entry.logo) || https(entry.background),
+            /* For a fixture the site's `logo` is the COMPETITION's (a series' for a session): a fixture's goes in `competitionLogo` so the host can show the sides, a session keeps it as its picture. */
+            logo: named.length >= 2 ? https(entry.background) : https(entry.logo) || https(entry.background),
             event: described.event,
             website: `${SITE}/programs/${entry.programId}`,
             network: "",
@@ -708,7 +713,7 @@ function buildEvents(): Promise<ScrapedCatalogue> {
 export const pitsportScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Pitsport",
-    version: "1.0.3",
+    version: "1.1.0",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveStream },
