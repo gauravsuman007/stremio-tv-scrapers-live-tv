@@ -366,10 +366,14 @@ ok(fourGot.status === 200 && fourGot.head === "hello" && fourLog[0] === `127.0.0
 
 const list = createServerForLists();
 
+const hits: Record<string, number> = {};
+
 function createServerForLists(): ReturnType<typeof httpServer> {
     const lists: Record<string, string[]> = {};
     const server = httpServer((request, response) => {
         const country = (request.url || "").split("/").pop() || "";
+
+        hits[country] = (hits[country] || 0) + 1;
 
         response.writeHead(lists[country] ? 200 : 404);
         response.end((lists[country] || []).join("\n"));
@@ -592,6 +596,64 @@ ok((await __test.gather(["DE"], __test.settings(), Date.now() + 30_000)).get("DE
 
 configure({ sources: { ...hubSources(), perCountry: [], world: [{ name: "late", url: `http://127.0.0.1:${hubPort}/spys`, parse: __test.parseSpys }] } });
 ok((await __test.gather(["DE"], __test.settings(), Date.now() - 1)).get("DE")!.length === 0, "past its deadline a gather fetches nothing");
+
+/* ---- the two passes: held proxies first, lists only for a country that needs them ---- */
+
+configure({ sources, keep: 2, countries: ["DE", "ES"] });
+await __test.refreshOne("DE", 60_000);
+
+const deGood = (await provider!.list()).filter((entry) => entry.country === "DE" && entry.score >= 70).length;
+
+ok(deGood >= 2, `DE holds at least two good proxies for the pass test (${deGood})`);
+
+for (const key of Object.keys(hits)) delete hits[key];
+
+await __test.refreshAll();
+
+ok(!hits.DE, `a country whose held proxies still pass is finished: its list was not read (${hits.DE || 0} reads)`);
+ok((hits.ES || 0) >= 1, "a country with too few good proxies has its list read");
+ok((await provider!.list()).filter((entry) => entry.country === "DE").length >= 2, "and the country that was skipped keeps its re-tested proxies");
+
+/* a held proxy that died is not kept, and the country becomes needy */
+const heldDe = (await provider!.list()).filter((entry) => entry.country === "DE");
+
+lists.DE = [];
+for (const key of Object.keys(hits)) delete hits[key];
+configure({ sources, keep: 2, countries: ["DE"] });
+__test.unload();
+await __test.refreshAll();
+ok(heldDe.length >= 2 && (await provider!.list()).filter((entry) => entry.country === "DE").length >= 2 && !hits.DE, "re-testing alone keeps a healthy country whatever its list says");
+
+/* ---- the sources added for countries with few free proxies ----------- */
+
+const freeOnly = __test.parseProxyFreeOnly(JSON.stringify([
+    { ip: "89.28.239.39", port: "10808", country: "GB", protocols: ["socks5"] },
+    { ip: "82.9.133.51", port: "8080", country: "GB", protocols: ["http", "https", "socks4"] },
+    { ip: "bad", port: "1", country: "GB", protocols: ["http"] },
+    { ip: "5.5.5.5", port: "70000", country: "GB", protocols: ["http"] }
+]), "GB");
+
+ok(JSON.stringify(freeOnly.map((entry) => entry.url)) === JSON.stringify(["socks5://89.28.239.39:10808", "http://82.9.133.51:8080", "http://82.9.133.51:8080", "socks4://82.9.133.51:8080"]) && freeOnly.every((entry) => entry.country === "GB"), "proxyfreeonly: one entry per protocol, https as http, bad rows dropped, country kept");
+ok(__test.parseProxyFreeOnly("<html>", "GB").length === 0, "proxyfreeonly: garbage gives nothing");
+
+const fine = __test.parseFineproxy(
+    '<tbody><tr class="fpb-row fpb-prow"><td class="col-ip"><div class="fpb-prow-title">PREMIUM</div></td></tr>' +
+        '<tr class="fpb-row"><td class="col-ip"><div class="fpb-ip">164.38.155.10<span class="fpb-ip-port">:80</span></div></td><td><div class="fpb-protos"><span class="fpb-proto on">HTTP</span><span class="fpb-proto off">HTTPS</span><span class="fpb-proto on">SOCKS5</span></div></td></tr>' +
+        '<tr class="fpb-row"><td class="col-ip"><div class="fpb-ip">1.2.3.4<span class="fpb-ip-port">:1080</span></div></td><td><span class="fpb-proto off">HTTP</span></td></tr></tbody>',
+    "GB"
+);
+
+ok(JSON.stringify(fine.map((entry) => entry.url)) === JSON.stringify(["http://164.38.155.10:80", "socks5://164.38.155.10:80"]), "fineproxy: only the protocols a row has switched on, no premium row, no row with none");
+ok(__test.fineproxyUrl("GB") === "https://fineproxy.org/free-proxies/europe/united-kingdom/" && __test.fineproxyUrl("US") === "https://fineproxy.org/free-proxies/north-america/united-states/" && __test.fineproxyUrl("ZZ") === "", "fineproxy: its page is filed by region and country name, and a country it does not know has none");
+
+const hubRows = __test.parseProxyHub(
+    '<td class="ip-cell"><span class="ip-text" title="31.59.20.249">31.59.20.249</span></td><td class="port-cell"><span class="port-text">6827</span></td>' +
+        '<td class="ip-cell"><span class="ip-text" title="9.9.9.9">9.9.9.9</span></td><td class="port-cell"><span class="port-text">3128</span></td>',
+    "GB",
+    "socks5"
+);
+
+ok(JSON.stringify(hubRows.map((entry) => entry.url)) === JSON.stringify(["socks5://31.59.20.249:6827", "socks5://9.9.9.9:3128"]), "proxyhub: ip and port cells, the page's protocol");
 
 /* a rebuild drops what died */
 configure({ sources });

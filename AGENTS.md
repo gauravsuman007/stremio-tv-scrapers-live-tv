@@ -646,6 +646,16 @@ holds it against local fakes):
   MuRongPIG, ...), and discovery through gfpcom's list of lists (public hosts
   only). More raw lists go in its `extraLists` setting. Reddit is not a source:
   unauthenticated reads answer 403 "Blocked" (tried 2026-10-05).
+- **Held proxies first, lists only when needed**: a rebuild re-tests every country's
+  held proxies first (a handful each); a country that still has `keepPerCountry`
+  good ones (score 70+) is finished and costs no list read and no fresh test. Only the
+  others are gathered and filled up. The whole run may take up to `budgetSeconds`
+  (default 2 hours, host limit 4); each country is saved as it finishes.
+- **Country-specific sources added 2026-10-05 for thin countries (UK)**:
+  proxyfreeonly's API, fineproxy's pages (by region and country, for the default
+  countries), proxyhub's per-protocol pages, proxygenerator's per-country files,
+  databay-labs' world lists. They mostly overlap the older ones (about 1,270 GB
+  candidates in all) -- the supply is thin, not the lists.
 - **Dead entries are cheap to drop**: a 2.5 s TCP connect check comes first (about
   nine in ten list entries are dead), and the small per-country lists are tested before
   the bulk ones (tens of thousands of addresses for one country, mostly dead). About one
