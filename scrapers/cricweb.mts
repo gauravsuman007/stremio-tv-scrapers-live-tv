@@ -557,10 +557,19 @@ function knownChannels(): Promise<Map<string, KnownChannel[]>> {
                 const sports = channel.categories?.includes("sports") === true;
 
                 add(fold(channel.name), { name: channel.name, country: channel.country, primary: true, sports });
-                for (const alt of channel.alt_names || []) add(fold(alt), { name: channel.name, country: channel.country, primary: false, sports });
+                /* Every reader keeps `primary || sports`, so a non-sports channel's
+                   alternate names are never read: not storing them is most of the
+                   map (11.7 MB held for a day, measured). */
+                if (sports) for (const alt of channel.alt_names || []) add(fold(alt), { name: channel.name, country: channel.country, primary: false, sports });
             }
 
             knownCache = { at: Date.now(), byName };
+            /* Let go ten minutes after a run rather than holding it for the
+               day: the events job runs hourly, and the map is megabytes of
+               heap between runs for a refetch of one file. */
+            setTimeout(() => {
+                knownCache = null;
+            }, 10 * 60 * 1000).unref?.();
         } catch (cause) {
             console.error("crichd: iptv-org names unavailable, using the site's own", cause);
             knownCache ||= { at: Date.now() - KNOWN_TTL_MS + 10 * 60 * 1000, byName: new Map() };
@@ -1090,7 +1099,7 @@ async function buildEvents(): Promise<ScrapedCatalogue> {
 export const cricwebScraper: Scraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.5.3",
+    version: "1.5.4",
     configSchema,
     build,
     buildEvents

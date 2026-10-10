@@ -11,6 +11,14 @@
          directory channel of that name gives ONE logo for, in any country.
     Nothing is borrowed for a name the directory does not know, and a logo the
     source already supplied is kept unless `dead` says its host is gone.
+
+    MEMORY: the directory is ~12 MB of strings, and nine scrapers carry this
+    block. It used to be held per scraper for the life of the process (over
+    100 MB once they had all run). Now it is ONE copy per process, shared
+    through `globalThis` (every scraper in the host sees the same global),
+    fetched by whichever scraper asks first, and dropped ten minutes after
+    the last `fillLogos` -- the scrapers all run in the same nightly window,
+    so they still share one fetch.
 */
 interface LogoDirectory {
     byCountry: Map<string, string>;
@@ -18,7 +26,11 @@ interface LogoDirectory {
 }
 
 const LOGO_API = "https://iptv-org.github.io/api";
-let logoDirectory: Promise<LogoDirectory | null> | null = null;
+const LOGO_DIRECTORY_IDLE_MS = 10 * 60_000;
+const logoShared = ((globalThis as Record<symbol, unknown>)[Symbol.for("live-tv.logo-directory")] ||= {
+    directory: null,
+    timer: null
+}) as { directory: Promise<LogoDirectory | null> | null; timer: ReturnType<typeof setTimeout> | null };
 
 function foldLogoName(name: string): string {
     return name
@@ -69,14 +81,20 @@ async function loadLogoDirectory(): Promise<LogoDirectory | null> {
         return directory;
     } catch (cause) {
         console.error("logo directory unavailable:", cause);
-        logoDirectory = null;
+        logoShared.directory = null;
         return null;
     }
 }
 
 /** Fills `logo` on channels that have none (or whose own is `dead`). Never throws; returns how many it filled. */
 async function fillLogos(channels: Array<{ name: string; country: string; logo: string }>, dead?: (logo: string) => boolean): Promise<number> {
-    const directory = await (logoDirectory ||= loadLogoDirectory());
+    if (logoShared.timer) clearTimeout(logoShared.timer);
+    const directory = await (logoShared.directory ||= loadLogoDirectory());
+    logoShared.timer = setTimeout(() => {
+        logoShared.directory = null;
+        logoShared.timer = null;
+    }, LOGO_DIRECTORY_IDLE_MS);
+    logoShared.timer.unref?.();
     if (!directory) return 0;
     let filled = 0;
 
