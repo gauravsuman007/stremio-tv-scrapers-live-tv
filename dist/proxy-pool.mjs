@@ -906,14 +906,35 @@ async function geolocate(ips, cfg, deadline) {
 async function gather(countries, cfg, deadline) {
     const wanted = new Set(countries);
     const result = new Map(countries.map((country) => [country, new Map()]));
-    const unlabeled = new Map();
+    /*
+        A uniform random SAMPLE of the unlabeled addresses, not all of them.
+        The world lists name hundreds of thousands, and `geolocate` asks
+        about `cfg.geolocate` (1,500 by default) at random anyway -- holding
+        every one of them first was 40 MB of heap for the length of a run,
+        measured. Reservoir sampling keeps the choice uniform across every
+        list however many there are; three times the allowance leaves room
+        for addresses that a later list turns out to label.
+    */
+    const sampleSize = Math.max(1_000, cfg.geolocate * 3);
+    const sampled = [];
+    const inSample = new Set();
+    let unlabeledSeen = 0;
     const labeledAnywhere = new Set();
     const add = (found, source) => {
         if (!cfg.protocols.includes(schemeOf(/^([a-z0-9]+):/i.exec(found.url)?.[1]) ?? ""))
             return;
         if (!found.country) {
-            if (!unlabeled.has(found.url))
-                unlabeled.set(found.url, source);
+            if (inSample.has(found.url))
+                return;
+            unlabeledSeen += 1;
+            const slot = sampled.length < sampleSize ? sampled.length : Math.floor(Math.random() * unlabeledSeen);
+            if (slot < sampleSize) {
+                const evicted = sampled[slot];
+                if (evicted)
+                    inSample.delete(evicted[0]);
+                sampled[slot] = [found.url, source];
+                inSample.add(found.url);
+            }
             return;
         }
         labeledAnywhere.add(found.url);
@@ -956,6 +977,7 @@ async function gather(countries, cfg, deadline) {
     }
     await each(jobs, 8, (job) => job());
     // Addresses that no list labelled: ask where they are, then treat them like the rest.
+    const unlabeled = new Map(sampled);
     const pending = [...unlabeled.keys()].filter((url) => !labeledAnywhere.has(url));
     const where = await geolocate(pending.map((url) => new URL(url).hostname), cfg, deadline);
     for (const url of pending) {
@@ -1190,7 +1212,7 @@ async function build(context) {
 export const proxyPoolScraper = {
     id: SCRAPER_ID,
     name: "Proxy pool (per-country HTTP proxies)",
-    version: "1.3.0",
+    version: "1.3.1",
     configSchema: CONFIG_SCHEMA,
     proxies: provider,
     build

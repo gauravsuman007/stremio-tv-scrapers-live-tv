@@ -78,7 +78,11 @@ function attribute(line, key) {
     return new RegExp(`${key}="([^"]*)"`).exec(line)?.[1]?.trim() || "";
 }
 const LOGO_API = "https://iptv-org.github.io/api";
-let logoDirectory = null;
+const LOGO_DIRECTORY_IDLE_MS = 10 * 60_000;
+const logoShared = (globalThis[Symbol.for("live-tv.logo-directory")] ||= {
+    directory: null,
+    timer: null
+});
 function foldLogoName(name) {
     return name
         .toLowerCase()
@@ -125,13 +129,20 @@ async function loadLogoDirectory() {
     }
     catch (cause) {
         console.error("logo directory unavailable:", cause);
-        logoDirectory = null;
+        logoShared.directory = null;
         return null;
     }
 }
 /** Fills `logo` on channels that have none (or whose own is `dead`). Never throws; returns how many it filled. */
 async function fillLogos(channels, dead) {
-    const directory = await (logoDirectory ||= loadLogoDirectory());
+    if (logoShared.timer)
+        clearTimeout(logoShared.timer);
+    const directory = await (logoShared.directory ||= loadLogoDirectory());
+    logoShared.timer = setTimeout(() => {
+        logoShared.directory = null;
+        logoShared.timer = null;
+    }, LOGO_DIRECTORY_IDLE_MS);
+    logoShared.timer.unref?.();
     if (!directory)
         return 0;
     let filled = 0;
@@ -377,7 +388,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const freetvScraper = {
     id: SCRAPER_ID,
     name: "Free-TV/IPTV",
-    version: "1.2.0",
+    version: "1.2.1",
     build
 };
 // -------------------------------------------------------------------------

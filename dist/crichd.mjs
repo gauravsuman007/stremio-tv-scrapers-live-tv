@@ -933,6 +933,12 @@ function knownChannels() {
                     add(fold(alt), { name: channel.name, country: channel.country, primary: false });
             }
             knownCache = { at: Date.now(), byName };
+            /* Let go ten minutes after a run rather than holding it for the
+               day: the events job runs hourly, and the map is megabytes of
+               heap between runs for a refetch of one file. */
+            setTimeout(() => {
+                knownCache = null;
+            }, 10 * 60 * 1000).unref?.();
         }
         catch (cause) {
             console.error("crichd: iptv-org names unavailable, using the site's own", cause);
@@ -1299,7 +1305,7 @@ async function buildEvents() {
 export const crichdScraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.5.3",
+    version: "1.5.4",
     configSchema,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveHandle },
